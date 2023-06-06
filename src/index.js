@@ -6,7 +6,7 @@ const title = 'hunter-x-hunter';
 let chapter_to_start_at = 1;
 
 const main = async () => {
-	Util.validate_path('./panels');
+	Util.validate_path('../panels');
 	chapter_to_start_at -= 1;
 
 	const chapter_links = await fetch_chapter_links(manga_site_url);
@@ -61,7 +61,7 @@ const download_panels = async(panel_links) => {
 			const panel_link = panel_links[i][j];
 			const extension = panel_link.slice(-3);
 
-			Util.validate_path(`./panels/${title}-chapter-${chapter_to_start_at + i}`);
+			Util.validate_path(`../panels/${title}-chapter-${chapter_to_start_at + i}`);
 
 			const options = {
 				url: panel_link,
