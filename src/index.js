@@ -1,12 +1,12 @@
 const Util = require('./utils');
 const download = require('image-downloader');
 
-const manga_site_url = 'https://ww5.manganelo.tv/manga/manga-oc955385';
-const title = 'hunter-x-hunter';
+const manga_site_url = 'https://ww5.manganelo.tv/manga/manga-lp988998';
+const title = 'dandadan';
 let chapter_to_start_at = 1;
 
 const main = async () => {
-	Util.validate_path('../panels');
+	Util.validate_path('./panels');
 	chapter_to_start_at -= 1;
 
 	const chapter_links = await fetch_chapter_links(manga_site_url);
@@ -55,17 +55,18 @@ const fetch_panel_links = async (chapter_links, chapter_to_start_at) => {
 
 const download_panels = async(panel_links) => {
 	for (let i = 0; i < panel_links.length; i++) {
-		console.log(`Starting Panel Downloads for Chapter ${chapter_to_start_at + i}`)
+		const chapter_num = i + 1;
+		console.log(`Starting Panel Downloads for Chapter ${chapter_to_start_at + chapter_num}`)
 
 		for (let j = 0; j < panel_links[i].length; j++) {
 			const panel_link = panel_links[i][j];
 			const extension = panel_link.slice(-3);
 
-			Util.validate_path(`../panels/${title}-chapter-${chapter_to_start_at + i}`);
+			Util.validate_path(`./panels/${title}-chapter-${chapter_to_start_at + chapter_num}`);
 
 			const options = {
 				url: panel_link,
-				dest: `../../panels/${title}-chapter-${chapter_to_start_at + i}/${title}-panel-${j + 1}.${extension}`
+				dest: `../../panels/${title}-chapter-${chapter_to_start_at + chapter_num}/${title}-panel-${j + 1}.${extension}`
 			}
 				
 			if (options.url) {
@@ -73,7 +74,7 @@ const download_panels = async(panel_links) => {
 			}
 		}
 
-		console.log(`Successfully downloaded ${panel_links[i].length} Panels for Chapter ${chapter_to_start_at + i}`)
+		console.log(`Successfully downloaded ${panel_links[i].length} Panels for Chapter ${chapter_num}`)
 	}
 }
 
