@@ -14,7 +14,7 @@ npm install
 
 Usage
 
-Open the index.js file in a text editor.
+Open the index.js file in notepad.
 
 Modify the following variables according to your requirements:
 
