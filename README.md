@@ -19,9 +19,11 @@ Open the index.js file in notepad.
 Modify the following variables according to your requirements:
 
 manga_site_url: The URL of the manga site you want to download from.
+
 Example: https://ww5.manganelo.tv/manga/manga-ng952689
 
 title: The title or name of the manga series.
+
 Example: Naruto
 
 chapter_to_start_at: The chapter number from which you want to start downloading. Set it to 1 to start from the first chapter.
@@ -33,6 +35,7 @@ Run the following command to start the script:
 node index.js
 
 The script will start fetching chapter links and panel links, and it will download the manga panels to the panels directory.
+
 Note: Make sure you have a stable internet connection while running the script, as it requires internet access to fetch the manga content.
 
 Folder Structure
