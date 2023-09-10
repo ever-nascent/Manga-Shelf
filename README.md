@@ -6,7 +6,9 @@ The script fetches chapter links, panel links, and downloads the panels to your 
 # Installation
 
 Clone the repository or download the source code files.
+
 Make sure you have Node.js installed on your machine.
+
 Open a terminal or command prompt and navigate to the project directory.
 
 Run the following command to install the required dependencies:
