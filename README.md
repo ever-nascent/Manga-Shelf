@@ -1,9 +1,9 @@
-Manga Downloader
+# Manga Downloader
 
 This is a Node.js script that allows you to download manga panels from https://ww5.manganelo.tv.
 The script fetches chapter links, panel links, and downloads the panels to your local machine.
 
-Installation
+# Installation
 
 Clone the repository or download the source code files.
 Make sure you have Node.js installed on your machine.
@@ -12,7 +12,7 @@ Open a terminal or command prompt and navigate to the project directory.
 Run the following command to install the required dependencies:
 npm install
 
-Usage
+# Usage
 
 Open the index.js file in notepad.
 
@@ -48,10 +48,10 @@ image-downloader: A library for downloading images from URLs.
 node-superfetch: A library to make HTTP request.
 cheerio: A library for parsing and manipulating HTML content.
 
-License
+# License
 This script is licensed under the MIT License.
 
 Feel free to modify and use the script according to your needs.
 
-Disclaimer
+# Disclaimer
 This script is intended for personal use only. Ensure that you have the necessary permissions to download and use the manga content in your jurisdiction. The author does not take any responsibility for any unauthorized usage or legal implications arising from the use of this script.
