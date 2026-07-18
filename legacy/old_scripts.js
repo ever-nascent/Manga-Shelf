@@ -12,6 +12,18 @@ class Utils {
 		}
 	}
 
+	static validate_file(path) {
+		try {
+			if (!fs.existsSync(path)) {
+				fs.writeFileSync(path, JSON.stringify({}), 'utf-8');
+			} else {
+				return true;
+			}
+		} catch {
+			console.error(`Error creating file: ${path}`, error)
+		}
+	}
+
 	static async fetch_url(url) {
 		try {
 			const web_request = await fetch.get(url);
@@ -49,6 +61,18 @@ class Utils {
 		});
 
 		return panels;
+	}
+	
+	static initMangaCheckpoint(title, chapter_links) {
+		this.validate_path(`./checkpoints`);
+		this.validate_file(`./checkpoints/${title}-checkpoint.json`);
+	
+		const mangaCheckpointJSON = fs.readFileSync(`./checkpoints/${title}-checkpoint.json`);
+		const mangaCheckpointObject = JSON.parse(mangaCheckpointJSON);
+		mangaCheckpointObject.chapter_links = chapter_links;
+		fs.writeFileSync(`./checkpoints/${title}-checkpoint.json`, JSON.stringify(mangaCheckpointObject, null, 2), 'utf-8');
+
+		console.log(`Updated ${title} Checkpoint Data.`);
 	}
 };
 
