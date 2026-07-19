@@ -457,6 +457,7 @@ select option { background: var(--panel); }
 	min-width: 195px;
 	max-height: 340px;
 	overflow-y: auto;
+	overscroll-behavior: contain; /* wheel at menu's end must not scroll the page behind it */
 	box-shadow: 0 12px 30px rgba(0, 0, 0, .55);
 	animation: menu-in .12s ease;
 }

@@ -23,11 +23,14 @@ export function closeActiveMenu() {
 		activeMenu.remove();
 		document.removeEventListener('click', onDocClick, true);
 		document.removeEventListener('keydown', onDocKey, true);
-		document.removeEventListener('scroll', closeActiveMenu, true);
+		document.removeEventListener('scroll', onDocScroll, true);
 		activeMenu = null;
 	}
 }
 function onDocClick(e) { if (activeMenu && !activeMenu.contains(e.target)) closeActiveMenu(); }
+// scrolling the page moves the anchor out from under the fixed menu → close;
+// scrolling inside the menu itself (long chapter lists) must NOT close it
+function onDocScroll(e) { if (activeMenu && !activeMenu.contains(e.target)) closeActiveMenu(); }
 function onDocKey(e) {
 	if (e.key === 'Escape' && activeMenu) {
 		// Escape only closes the menu — don't let it also close the reader
@@ -67,7 +70,7 @@ export function openMenu(anchor, items) {
 	setTimeout(() => {
 		document.addEventListener('click', onDocClick, true);
 		document.addEventListener('keydown', onDocKey, true);
-		document.addEventListener('scroll', closeActiveMenu, true);
+		document.addEventListener('scroll', onDocScroll, true);
 	}, 0);
 }
 
