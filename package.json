@@ -32,7 +32,7 @@
     "publish": {
       "provider": "github",
       "owner": "LiterallyLink",
-      "repo": "Manga-Downloader"
+      "repo": "Manga-Shelf"
     },
     "files": [
       "electron/**/*",

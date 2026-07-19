@@ -2,7 +2,7 @@
 
 const fs = require('fs');
 
-const USER_AGENT = 'MangaShelf/2.0 (personal desktop reader; github.com/LiterallyLink/Manga-Downloader)';
+const USER_AGENT = 'MangaShelf/2.0 (personal desktop reader; github.com/LiterallyLink/Manga-Shelf)';
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
