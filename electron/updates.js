@@ -1,11 +1,57 @@
 // Checks followed manga for newly released chapters.
 //
-// Strategy: one batched /manga?ids[] call per 100 follows tells us each manga's
-// latest uploaded chapter id (any language). Only manga whose id changed since
-// the last check get an individual feed request, so a quiet library costs a
-// couple of API calls total.
+// Follows can come from two sources:
+//   MangaDex   (UUID ids)       one batched /manga?ids[] call per 100 follows
+//                               tells us each manga's latest uploaded chapter
+//                               id, so only manga whose id changed since the
+//                               last check cost an individual feed request.
+//   MangaKatana (mk: ids)       no API, so each follow costs one HTML scrape of
+//                               its chapter list. The newest chapter id doubles
+//                               as the "changed since last time?" marker.
 
 const mangadex = require('./mangadex');
+const mangakatana = require('./mangakatana');
+
+// Turns a manga's newest chapters into feed entries, seeding on first sight so
+// we never dump a follow's entire backlog into the updates feed. Shared by both
+// sources. Mutates `stored.lastSeenNum` and returns what to report.
+function collectFresh(follow, chapters, stored, library) {
+	const id = follow.manga.id;
+
+	if (stored.lastSeenNum === null || stored.lastSeenNum === undefined) {
+		// first sync for this follow: record the current newest, report nothing
+		const nums = chapters.map((c) => parseFloat(c.num)).filter((n) => !Number.isNaN(n));
+		stored.lastSeenNum = nums.length ? Math.max(...nums) : 0;
+		return { added: 0, fresh: null };
+	}
+
+	const entries = chapters
+		.filter((c) => !c.external && !Number.isNaN(parseFloat(c.num)))
+		.filter((c) => parseFloat(c.num) > stored.lastSeenNum)
+		.map((c) => ({
+			mangaId: id,
+			mangaTitle: follow.manga.title,
+			coverUrl: follow.manga.coverUrl,
+			chapterId: c.id,
+			num: c.num,
+			chapterTitle: c.title,
+			publishAt: c.publishAt,
+			foundAt: new Date().toISOString()
+		}));
+
+	const pushed = library.pushUpdates(entries);
+	return {
+		added: pushed.length,
+		fresh: pushed.length
+			? {
+				mangaId: id,
+				title: follow.manga.title,
+				notify: stored.notify !== false,
+				nums: pushed.map((e) => e.num)
+			}
+			: null
+	};
+}
 
 async function checkForUpdates(library) {
 	const settings = library.getSettings();
@@ -16,17 +62,27 @@ async function checkForUpdates(library) {
 		return { added: 0, feed: library.getUpdatesFeed(), fresh: [] };
 	}
 
-	// batch: current latest-chapter marker for every follow
-	const latestById = new Map();
-	for (let i = 0; i < follows.length; i += 100) {
-		const chunk = follows.slice(i, i + 100).map((f) => f.manga.id);
-		const items = await mangadex.getMangaByIds(chunk);
-		for (const m of items) latestById.set(m.id, m.latestChapterId);
-	}
+	const mdFollows = follows.filter((f) => !mangakatana.isMkId(f.manga.id));
+	const mkFollows = follows.filter((f) => mangakatana.isMkId(f.manga.id));
 
 	let added = 0;
 	const freshByManga = []; // for desktop notifications
-	for (const f of follows) {
+
+	// ----- MangaDex: batch the cheap "did anything change?" markers -----
+	// One malformed batch (or a MangaDex outage) must not sink the whole check,
+	// so a failed chunk just leaves those follows unmarked and skipped this run.
+	const latestById = new Map();
+	for (let i = 0; i < mdFollows.length; i += 100) {
+		const chunk = mdFollows.slice(i, i + 100).map((f) => f.manga.id);
+		try {
+			const items = await mangadex.getMangaByIds(chunk);
+			for (const m of items) latestById.set(m.id, m.latestChapterId);
+		} catch (err) {
+			console.error('Update batch failed for a chunk of follows:', err.message);
+		}
+	}
+
+	for (const f of mdFollows) {
 		const id = f.manga.id;
 		const latest = latestById.get(id);
 		const stored = library.db.follows[id];
@@ -37,36 +93,30 @@ async function checkForUpdates(library) {
 				language: settings.language,
 				contentRating: settings.contentRating
 			});
+			const result = collectFresh(f, chapters, stored, library);
+			added += result.added;
+			if (result.fresh) freshByManga.push(result.fresh);
+			stored.lastCheckedChapterId = latest;
+		} catch (err) {
+			console.error(`Update check failed for ${f.manga.title}:`, err.message);
+		}
+	}
 
-			if (stored.lastSeenNum === null || stored.lastSeenNum === undefined) {
-				// first sync for this follow: record the current newest, report nothing
-				const nums = chapters.map((c) => parseFloat(c.num)).filter((n) => !Number.isNaN(n));
-				stored.lastSeenNum = nums.length ? Math.max(...nums) : 0;
-			} else {
-				const fresh = chapters
-					.filter((c) => !c.external && !Number.isNaN(parseFloat(c.num)))
-					.filter((c) => parseFloat(c.num) > stored.lastSeenNum)
-					.map((c) => ({
-						mangaId: id,
-						mangaTitle: f.manga.title,
-						coverUrl: f.manga.coverUrl,
-						chapterId: c.id,
-						num: c.num,
-						chapterTitle: c.title,
-						publishAt: c.publishAt,
-						foundAt: new Date().toISOString()
-					}));
-				const pushed = library.pushUpdates(fresh);
-				added += pushed.length;
-				if (pushed.length) {
-					freshByManga.push({
-						mangaId: id,
-						title: f.manga.title,
-						notify: stored.notify !== false,
-						nums: pushed.map((e) => e.num)
-					});
-				}
-			}
+	// ----- MangaKatana: one chapter-list scrape per follow -----
+	for (const f of mkFollows) {
+		const id = f.manga.id;
+		const stored = library.db.follows[id];
+		if (!stored) continue;
+
+		try {
+			const chapters = await mangakatana.getChapters(id);
+			if (!chapters.length) continue;
+			const latest = chapters[chapters.length - 1].id; // list is oldest -> newest
+			if (latest === stored.lastCheckedChapterId) continue;
+
+			const result = collectFresh(f, chapters, stored, library);
+			added += result.added;
+			if (result.fresh) freshByManga.push(result.fresh);
 			stored.lastCheckedChapterId = latest;
 		} catch (err) {
 			console.error(`Update check failed for ${f.manga.title}:`, err.message);
