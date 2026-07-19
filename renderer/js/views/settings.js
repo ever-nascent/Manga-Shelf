@@ -119,7 +119,7 @@ export async function render(root, params, ctx, signal) {
 		if (evt.type === 'none') { updateStatus.textContent = `You're on the latest version (${version}).`; checkBtn.disabled = false; }
 		else if (evt.type === 'available') { updateStatus.textContent = `Update v${evt.version} found — downloading…`; }
 		else if (evt.type === 'progress') { updateStatus.textContent = `Downloading update… ${evt.percent}%`; }
-		else if (evt.type === 'downloaded') { updateStatus.textContent = `v${evt.version} downloaded — it'll install next time you close MangaShelf.`; checkBtn.disabled = false; }
+		else if (evt.type === 'downloaded') { updateStatus.textContent = `v${evt.version} is ready to install.`; checkBtn.disabled = false; }
 		else if (evt.type === 'error') { updateStatus.textContent = `Update check failed: ${evt.message}`; checkBtn.disabled = false; }
 	};
 	window.addEventListener('app-update-event', onUpdateEvent, { signal });

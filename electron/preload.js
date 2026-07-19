@@ -31,6 +31,7 @@ contextBridge.exposeInMainWorld('api', {
 	// quit prompt: main asks, the renderer answers 'pause' | 'cancel' | 'stay'
 	onQuitConfirm: (cb) => ipcRenderer.on('quit:confirm', (_e, info) => cb(info)),
 	quitPromptShown: () => ipcRenderer.send('quit:shown'),
+	installUpdate: invoke('app:installUpdate'),
 	answerQuit: (choice) => ipcRenderer.send('quit:answer', choice),
 	onQueueUpdate: (cb) => {
 		const listener = (_e, queue) => cb(queue);

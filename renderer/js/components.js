@@ -103,11 +103,11 @@ export function openModal(title) {
 	return { body, close };
 }
 
-// ---------- quit confirmation (downloads still running) ----------
+// ---------- shared "pick one of these" dialog ----------
 
-// Resolves with 'pause' | 'cancel' | 'stay'. Dismissing (Escape, backdrop,
-// close button) counts as 'stay' — the safe answer, since the other two exit.
-export function confirmQuitWithDownloads(active) {
+// choices: [{ value, icon, label, hint, cls }]. Dismissing resolves with
+// dismissValue, so Escape/backdrop always mean the harmless option.
+function choiceDialog({ title, message, choices, dismissValue }) {
 	return new Promise((resolve) => {
 		let answered = false;
 		const answer = (choice) => {
@@ -118,46 +118,86 @@ export function confirmQuitWithDownloads(active) {
 			resolve(choice);
 		};
 
-		const n = active === 1 ? '1 chapter is' : `${active} chapters are`;
-		const choice = (cls, iconName, label, hint, value) => h('button',
-			{ class: `btn quit-choice ${cls}`, onclick: () => answer(value) },
-			icon(iconName, 16),
-			h('span', {},
-				h('b', {}, label),
-				h('small', {}, hint))
-		);
-
 		const backdrop = h('div', { class: 'modal-backdrop' },
 			h('div', { class: 'modal-dialog quit-dialog' },
 				h('div', { class: 'modal-head' },
-					h('h2', {}, 'Downloads in progress'),
+					h('h2', {}, title),
 					h('button', {
 						class: 'btn icon-only modal-close', title: 'Close',
-						onclick: () => answer('stay')
+						onclick: () => answer(dismissValue)
 					}, icon('x', 15))
 				),
 				h('div', { class: 'modal-body' },
-					h('div', { class: 'quit-msg' },
-						`${n} still downloading. The queue isn't kept unless you pause it.`),
-					h('div', { class: 'quit-choices' },
-						choice('primary', 'pause', 'Pause and exit',
-							'Saves the queue and picks up where it left off next launch.', 'pause'),
-						choice('danger', 'trash', 'Cancel downloads and exit',
-							'Clears the queue. Pages already downloaded are kept.', 'cancel'),
-						choice('', 'download', 'Keep downloading',
-							'Stay in the app and let the queue finish.', 'stay')
-					)
+					h('div', { class: 'quit-msg' }, message),
+					h('div', { class: 'quit-choices' }, choices.map((c) => h('button',
+						{ class: `btn quit-choice ${c.cls || ''}`, onclick: () => answer(c.value) },
+						icon(c.icon, 16),
+						h('span', {}, h('b', {}, c.label), h('small', {}, c.hint))
+					)))
 				)
 			)
 		);
 
 		function onKey(e) {
-			if (e.key === 'Escape') { e.stopPropagation(); answer('stay'); }
+			if (e.key === 'Escape') { e.stopPropagation(); answer(dismissValue); }
 		}
-		backdrop.addEventListener('click', (e) => { if (e.target === backdrop) answer('stay'); });
+		backdrop.addEventListener('click', (e) => { if (e.target === backdrop) answer(dismissValue); });
 		document.addEventListener('keydown', onKey, true);
 		document.body.append(backdrop);
 		backdrop.querySelector('.quit-choice').focus();
+	});
+}
+
+// ---------- update downloaded and waiting ----------
+
+// Resolves 'now' (restart into it) or 'later' (install when the app closes).
+export function confirmUpdateReady(version) {
+	return choiceDialog({
+		title: 'Update ready',
+		message: `MangaShelf ${version} has been downloaded. Installing takes a few seconds, and MangaShelf has to close while it runs.`,
+		dismissValue: 'later',
+		choices: [
+			{
+				value: 'now', icon: 'refresh', cls: 'primary',
+				label: 'Restart and update now',
+				hint: 'Closes MangaShelf, installs, and reopens it for you.'
+			},
+			{
+				value: 'later', icon: 'clock',
+				label: 'Update when I close MangaShelf',
+				hint: 'Carry on for now. The installer runs, with its progress showing, once you exit.'
+			}
+		]
+	});
+}
+
+// ---------- quit confirmation (downloads still running) ----------
+
+// Resolves with 'pause' | 'cancel' | 'stay'. Dismissing (Escape, backdrop,
+// close button) counts as 'stay' — the safe answer, since the other two exit.
+export function confirmQuitWithDownloads(active) {
+	const n = active === 1 ? '1 chapter is' : `${active} chapters are`;
+	return choiceDialog({
+		title: 'Downloads in progress',
+		message: `${n} still downloading. The queue isn't kept unless you pause it.`,
+		dismissValue: 'stay',
+		choices: [
+			{
+				value: 'pause', icon: 'pause', cls: 'primary',
+				label: 'Pause and exit',
+				hint: 'Saves the queue and picks up where it left off next launch.'
+			},
+			{
+				value: 'cancel', icon: 'trash', cls: 'danger',
+				label: 'Cancel downloads and exit',
+				hint: 'Clears the queue. Pages already downloaded are kept.'
+			},
+			{
+				value: 'stay', icon: 'download',
+				label: 'Keep downloading',
+				hint: 'Stay in the app and let the queue finish.'
+			}
+		]
 	});
 }
 

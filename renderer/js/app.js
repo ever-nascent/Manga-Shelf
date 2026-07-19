@@ -8,7 +8,7 @@ import * as updates from './views/updates.js';
 import { openReader } from './views/reader.js';
 import { clear, toast } from './util.js';
 import { icon } from './icons.js';
-import { closeActiveMenu, confirmQuitWithDownloads } from './components.js';
+import { closeActiveMenu, confirmQuitWithDownloads, confirmUpdateReady } from './components.js';
 
 const views = { home, browse, detail, library, downloads, settings, updates };
 const NAV_ICONS = { home: 'home', browse: 'compass', library: 'books', updates: 'bell', downloads: 'download', settings: 'gear' };
@@ -133,12 +133,24 @@ window.api.onNavigate((view) => {
 	}
 });
 
-// app self-update: checks + downloads silently in the background, installs
-// itself the next time the app quits normally — nothing for the user to see
-// or act on. Settings > About still surfaces status for anyone who looks.
-window.api.onAppUpdate((evt) => {
+// app self-update: checks + downloads quietly in the background, then asks
+// before installing. Installing swaps the exe out for a few seconds, so it
+// can't happen unannounced — that reads as the app breaking.
+let updatePromptShown = false;
+
+window.api.onAppUpdate(async (evt) => {
 	window.dispatchEvent(new CustomEvent('app-update-event', { detail: evt }));
 	if (evt.type === 'error') console.error('Update check failed:', evt.message);
+
+	if (evt.type !== 'downloaded' || updatePromptShown) return;
+	updatePromptShown = true;
+	closeActiveMenu();
+	if (await confirmUpdateReady(evt.version) === 'now') {
+		toast('Installing update — MangaShelf will reopen in a moment…', 'info', 8000);
+		await window.api.installUpdate();
+	} else {
+		toast(`Update ${evt.version} will install when you close MangaShelf.`, 'info', 5000);
+	}
 });
 
 navigate('home', {}, { push: false });

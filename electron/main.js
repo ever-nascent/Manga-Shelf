@@ -27,6 +27,8 @@ let downloader = null;
 let cache = null;
 let quitConfirmed = false; // set once the user has answered the quit prompt
 let quitPromptOpen = false;
+let updateReadyVersion = null; // a downloaded update waiting to be installed
+let installingUpdate = false;
 
 // Standard-scheme URLs need a (dummy) host — Chromium rejects an empty
 // authority, which silently broke every local cover/page image before.
@@ -87,9 +89,16 @@ function createWindow() {
 	// Downloads live in memory, so closing mid-queue would silently discard
 	// them. Intercept the close and let the renderer ask what to do.
 	win.on('close', (e) => {
-		if (quitConfirmed || !downloader?.hasActiveJobs()) return;
-		e.preventDefault();
-		askBeforeQuit();
+		if (installingUpdate) return; // the installer is taking it from here
+		if (!quitConfirmed && downloader?.hasActiveJobs()) {
+			e.preventDefault();
+			askBeforeQuit();
+			return;
+		}
+		if (updateReadyVersion) {
+			e.preventDefault();
+			shutdown();
+		}
 	});
 
 	if (DEV) {
@@ -100,6 +109,24 @@ function createWindow() {
 		});
 		startDevControlServer();
 	}
+}
+
+// Last step before the app goes away. If an update is waiting, hand off to the
+// installer with its progress window visible rather than replacing the exe
+// behind the user's back.
+function shutdown() {
+	if (updateReadyVersion && !installingUpdate && app.isPackaged) {
+		installingUpdate = true;
+		try {
+			appUpdater.quitAndInstall({ relaunch: false });
+			return;
+		} catch (err) {
+			// never let a failed install trap the user in a window that won't
+			// close — fall through and quit normally
+			console.error('Install on quit failed:', err.message);
+		}
+	}
+	if (win && !win.isDestroyed()) win.destroy();
 }
 
 // Ask the renderer to show the "downloads in progress" prompt and act on the
@@ -121,7 +148,7 @@ function askBeforeQuit() {
 		// 'pause' keeps the queue for next launch; 'cancel' just drops it
 		library.savePendingQueue(choice === 'pause' ? downloader.pendingJobs() : []);
 		quitConfirmed = true;
-		if (win && !win.isDestroyed()) win.destroy();
+		shutdown();
 	};
 
 	const onAnswer = (_e, choice) => finish(choice);
@@ -313,6 +340,14 @@ function registerIpc() {
 		}
 		return appUpdater.checkForUpdates();
 	}));
+	// "Restart and update now": installs with the progress window showing, then
+	// reopens MangaShelf itself so the user never chases a missing exe.
+	ipcMain.handle('app:installUpdate', wrap(() => {
+		if (!updateReadyVersion || installingUpdate) return false;
+		installingUpdate = true;
+		appUpdater.quitAndInstall({ relaunch: true });
+		return true;
+	}));
 	ipcMain.handle('shell:openPath', wrap((p) => shell.openPath(p)));
 	ipcMain.handle('shell:openExternal', wrap((url) => {
 		if (/^https:\/\//.test(url)) shell.openExternal(url);
@@ -428,6 +463,7 @@ app.whenReady().then(() => {
 	// app self-update: only meaningful for an installed (NSIS) packaged build
 	if (app.isPackaged) {
 		appUpdater.initAutoUpdater((evt) => {
+			if (evt.type === 'downloaded') updateReadyVersion = evt.version;
 			if (win && !win.isDestroyed()) win.webContents.send('app-update:event', evt);
 		});
 		setTimeout(() => appUpdater.checkForUpdates(), 8_000);

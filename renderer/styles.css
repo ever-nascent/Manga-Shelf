@@ -525,8 +525,10 @@ select option { background: var(--panel); }
 	width: 100%;
 	padding: 12px 14px;
 	text-align: left;
+	white-space: normal; /* .btn sets nowrap, which clips the hint line */
 }
 .quit-choice svg { flex: none; margin-top: 2px; }
+.quit-choice > span { min-width: 0; }
 .quit-choice b { display: block; font-weight: 600; }
 .quit-choice small {
 	display: block;
