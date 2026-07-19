@@ -45,19 +45,39 @@ export async function render(root, params, ctx) {
 	}
 
 	if (readingAll.length) {
-		body.append(
-			h('section', { class: 'section' },
-				h('div', { class: 'section-head' },
-					h('h2', {}, 'Continue Reading'),
-					h('button', { class: 'more', onclick: () => ctx.navigate('library') }, 'My library', icon('chevron-right', 13))
-				),
-				h('div', { class: 'card-row' }, readingAll.slice(0, 12).map((entry) =>
-					mangaCard(entry.manga, () => resume(entry), {
-						sub: `Ch. ${entry.chapterNum ?? '?'} · page ${(entry.page || 0) + 1}`,
-						corner: 'play'
-					})))
-			)
+		const row = h('div', { class: 'card-row' });
+		const section = h('section', { class: 'section' },
+			h('div', { class: 'section-head' },
+				h('h2', {}, 'Continue Reading'),
+				h('button', { class: 'more', onclick: () => ctx.navigate('library') }, 'My library', icon('chevron-right', 13))
+			),
+			row
 		);
+
+		for (const entry of readingAll.slice(0, 12)) {
+			// clicking the card opens the series page; the hover buttons are the
+			// shortcuts for jumping back in or forgetting where you were
+			const card = mangaCard(entry.manga, () => ctx.navigate('detail', { id: entry.manga.id }), {
+				sub: `Ch. ${entry.chapterNum ?? '?'} · page ${(entry.page || 0) + 1}`,
+				corner: 'play',
+				quick: [
+					{ icon: 'play', label: 'Resume reading', onClick: () => resume(entry) },
+					{
+						icon: 'trash',
+						label: 'Remove from Continue Reading',
+						onClick: async () => {
+							await window.api.removeReading(entry.manga.id);
+							card.remove();
+							if (!row.children.length) section.remove();
+							toast(`Removed ${entry.manga.title} from Continue Reading.`, 'info', 2200);
+						}
+					}
+				]
+			});
+			row.append(card);
+		}
+
+		body.append(section);
 	}
 
 	const rows = [

@@ -7,7 +7,7 @@ const LANGUAGES = [
 	['id', 'Indonesian'], ['vi', 'Vietnamese'], ['pl', 'Polish'], ['tr', 'Turkish']
 ];
 
-export async function render(root, params, ctx) {
+export async function render(root, params, ctx, signal) {
 	root.append(h('div', { class: 'view-title' }, 'Settings'));
 	let settings = await window.api.getSettings();
 
@@ -115,7 +115,6 @@ export async function render(root, params, ctx) {
 	}
 
 	const onUpdateEvent = (e) => {
-		if (!root.isConnected) { window.removeEventListener('app-update-event', onUpdateEvent); return; }
 		const evt = e.detail;
 		if (evt.type === 'none') { updateStatus.textContent = `You're on the latest version (${version}).`; checkBtn.disabled = false; }
 		else if (evt.type === 'available') { updateStatus.textContent = `Update v${evt.version} found — downloading…`; }
@@ -123,7 +122,7 @@ export async function render(root, params, ctx) {
 		else if (evt.type === 'downloaded') { updateStatus.textContent = `v${evt.version} downloaded — it'll install next time you close MangaShelf.`; checkBtn.disabled = false; }
 		else if (evt.type === 'error') { updateStatus.textContent = `Update check failed: ${evt.message}`; checkBtn.disabled = false; }
 	};
-	window.addEventListener('app-update-event', onUpdateEvent);
+	window.addEventListener('app-update-event', onUpdateEvent, { signal });
 
 	root.append(h('div', { class: 'settings-block' },
 		h('h3', {}, 'About'),

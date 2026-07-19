@@ -197,6 +197,7 @@ function registerIpc() {
 	ipcMain.handle('reading:set', wrap((mangaSnap, progress) => library.setReading(mangaSnap, progress)));
 	ipcMain.handle('reading:get', wrap((id) => decorateReading(library.getReading(id))));
 	ipcMain.handle('reading:all', wrap(() => library.getReadingAll().map(decorateReading)));
+	ipcMain.handle('reading:remove', wrap((id) => library.removeReading(id)));
 
 	// ----- follows -----
 	ipcMain.handle('follows:set', wrap((manga, status, lastSeenNum) => library.follow(manga, status, lastSeenNum)));

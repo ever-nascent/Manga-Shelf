@@ -43,6 +43,7 @@ contextBridge.exposeInMainWorld('api', {
 	setReading: invoke('reading:set'),
 	getReading: invoke('reading:get'),
 	getReadingAll: invoke('reading:all'),
+	removeReading: invoke('reading:remove'),
 
 	// follows
 	setFollow: invoke('follows:set'),

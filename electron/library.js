@@ -227,6 +227,13 @@ class Library {
 			.sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
 	}
 
+	// Drop a series from Continue Reading. Downloads and follows are untouched;
+	// this only forgets where you were.
+	removeReading(mangaId) {
+		delete this.db.reading[mangaId];
+		this.saveDb();
+	}
+
 	// ---------- follows (bookmarks with a status shelf) ----------
 
 	follow(manga, status, lastSeenNum) {

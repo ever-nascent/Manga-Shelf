@@ -10,7 +10,7 @@ const STATUS_TEXT = {
 	cancelled: 'Cancelled'
 };
 
-export async function render(root, params, ctx) {
+export async function render(root, params, ctx, signal) {
 	const retryAllBtn = h('button', { class: 'btn small hidden' }, icon('refresh', 14), 'Retry failed');
 	const clearBtn = h('button', { class: 'btn small' }, icon('trash', 14), 'Clear finished');
 	const summary = h('div', { class: 'dl-summary' });
@@ -75,8 +75,6 @@ export async function render(root, params, ctx) {
 	}
 
 	function draw(queue) {
-		if (!root.isConnected) { window.removeEventListener('queue-update', onUpdate); return; }
-
 		const ids = new Set(queue.map((j) => j.id));
 		for (const [id, row] of rows) {
 			if (!ids.has(id)) { row.el.remove(); rows.delete(id); }
@@ -120,7 +118,7 @@ export async function render(root, params, ctx) {
 		}
 	});
 
-	const onUpdate = (e) => draw(e.detail);
-	window.addEventListener('queue-update', onUpdate);
-	draw(await window.api.getQueue());
+	window.addEventListener('queue-update', (e) => draw(e.detail), { signal });
+	const queue = await window.api.getQueue();
+	if (!signal?.aborted) draw(queue);
 }

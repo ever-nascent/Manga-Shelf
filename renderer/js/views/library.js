@@ -9,13 +9,13 @@ const TABS = [
 
 const state = { tab: 'reading' };
 
-export async function render(root, params, ctx) {
-	if (params.id) return renderManga(root, params, ctx);
+export async function render(root, params, ctx, signal) {
+	if (params.id) return renderManga(root, params, ctx, signal);
 	if (params.tab) state.tab = params.tab;
 
 	root.append(h('div', { class: 'view-title' }, 'My Library'));
 
-	const [follows, downloads] = await Promise.all([
+	let [follows, downloads] = await Promise.all([
 		window.api.getFollows(),
 		window.api.getLibrary()
 	]);
@@ -61,6 +61,30 @@ export async function render(root, params, ctx) {
 		}
 	};
 
+	// Open a downloaded series in the reader at its saved spot. Closing the
+	// reader reveals this tab again, so refresh the cards to show new progress.
+	const resumeDownloaded = (m) => {
+		const readingList = m.chapters.map((c) => ({ ...c, external: false }));
+		if (!readingList.length) { ctx.navigate('library', { id: m.id }); return; }
+
+		let idx = 0;
+		let page = 0;
+		if (m.progress) {
+			const found = resumeIndex(readingList, m.progress.chapterId, m.progress.chapterNum);
+			if (found >= 0) { idx = found; page = m.progress.page || 0; }
+		}
+
+		const onClosed = async () => {
+			window.removeEventListener('reader-closed', onClosed);
+			if (signal?.aborted) return;
+			downloads = await window.api.getLibrary();
+			if (!signal?.aborted && state.tab === 'downloads') drawContent();
+		};
+		window.addEventListener('reader-closed', onClosed, { signal });
+
+		ctx.openReader(m, readingList, idx, page);
+	};
+
 	const drawDownloads = () => {
 		if (!downloads.length) {
 			content.append(h('div', { class: 'empty-state' },
@@ -75,9 +99,15 @@ export async function render(root, params, ctx) {
 		for (const m of downloads) {
 			const total = m.chapters.length;
 			const lastReadNum = m.progress?.chapterNum;
-			const card = mangaCard(m, () => ctx.navigate('library', { id: m.id }), {
+			// clicking a downloaded series drops straight into the reader; the
+			// reader is an overlay, so closing it uncovers this same tab again
+			const card = mangaCard(m, () => resumeDownloaded(m), {
 				sub: `${total} chapter${total === 1 ? '' : 's'}${lastReadNum ? ` · at ch. ${lastReadNum}` : ''}`,
-				corner: m.progress ? 'play' : null
+				corner: m.progress ? 'play' : null,
+				quick: [
+					{ icon: 'books', label: 'Chapters & export', onClick: () => ctx.navigate('library', { id: m.id }) },
+					{ icon: 'compass', label: 'Series page', onClick: () => ctx.navigate('detail', { id: m.id }) }
+				]
 			});
 			card.classList.add('lib-card');
 			if (total && lastReadNum) {
@@ -93,8 +123,10 @@ export async function render(root, params, ctx) {
 	drawContent();
 }
 
-async function renderManga(root, params, ctx) {
+async function renderManga(root, params, ctx, signal) {
 	const m = await window.api.getLibraryManga(params.id);
+	// navigated away (or a newer rerender started) while the read was in flight
+	if (signal?.aborted) return;
 	if (!m) { ctx.navigate('library', {}, { push: false }); return; }
 
 	root.append(h('button', { class: 'back-btn', onclick: ctx.back }, icon('chevron-left', 15), 'Back'));
@@ -157,7 +189,16 @@ async function renderManga(root, params, ctx) {
 		)
 	);
 
-	const rerender = () => { clear(root); renderManga(root, params, ctx); };
+	// Each pass owns its listeners: a rerender (or navigating away) aborts the
+	// previous pass so only one copy of this page can ever react to an event.
+	const pass = new AbortController();
+	signal?.addEventListener('abort', () => pass.abort(), { once: true });
+
+	const rerender = () => {
+		pass.abort();
+		clear(root);
+		renderManga(root, params, ctx, signal);
+	};
 
 	root.append(h('div', { class: 'section-sub' }, 'Downloaded chapters'));
 	root.append(
@@ -204,9 +245,7 @@ async function renderManga(root, params, ctx) {
 	);
 
 	// progress may have changed while reading
-	const onReaderClosed = () => {
-		window.removeEventListener('reader-closed', onReaderClosed);
-		if (root.isConnected) rerender();
-	};
-	window.addEventListener('reader-closed', onReaderClosed);
+	window.addEventListener('reader-closed', () => {
+		if (!pass.signal.aborted) rerender();
+	}, { once: true, signal: pass.signal });
 }

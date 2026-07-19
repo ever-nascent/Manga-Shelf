@@ -2,7 +2,7 @@ import { h, clear, spinner, errorBox, fmtNum, fmtDate, toast, STATUS_LABEL, dedu
 import { mangaCard, coverImg, openMenu, openModal, styledSelect, quickRead, discoverQuickActions, FOLLOW_STATUSES, followStatusLabel } from '../components.js';
 import { icon } from '../icons.js';
 
-export async function render(root, params, ctx) {
+export async function render(root, params, ctx, signal) {
 	root.append(h('button', { class: 'back-btn', onclick: ctx.back }, icon('chevron-left', 15), 'Back'));
 	const body = h('div', {});
 	root.append(body);
@@ -298,7 +298,6 @@ export async function render(root, params, ctx) {
 	if (chapters.length) {
 		renderTable();
 		const onQueue = (e) => {
-			if (!root.isConnected) { window.removeEventListener('queue-update', onQueue); return; }
 			for (const job of e.detail) {
 				if (job.mangaId === manga.id && job.status === 'done' && !downloaded.has(job.chapterId)) {
 					downloaded.add(job.chapterId);
@@ -307,7 +306,7 @@ export async function render(root, params, ctx) {
 				}
 			}
 		};
-		window.addEventListener('queue-update', onQueue);
+		window.addEventListener('queue-update', onQueue, { signal });
 	} else if (!chaptersWrap.querySelector('.error-box')) {
 		clear(chaptersWrap);
 		chaptersWrap.append(h('div', { class: 'notice' },

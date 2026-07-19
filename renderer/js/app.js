@@ -18,6 +18,11 @@ const stack = [];
 let current = null;
 let firstRenderDone = false;
 
+// Aborted whenever we navigate away. Views get the signal and hang their
+// window listeners off it, so a view that's been replaced can't keep
+// reacting to events and appending to a container it no longer owns.
+let viewAbort = null;
+
 export const ctx = {
 	navigate,
 	back,
@@ -42,13 +47,17 @@ export function back() {
 
 async function render(restoreScroll = 0) {
 	closeActiveMenu();
+	viewAbort?.abort();
+	viewAbort = new AbortController();
+	const { signal } = viewAbort;
 	for (const btn of document.querySelectorAll('#nav button')) {
 		btn.classList.toggle('active', btn.dataset.view === current.name);
 	}
 	clear(content);
 	content.scrollTop = 0;
 	try {
-		await views[current.name].render(content, current.params, ctx);
+		await views[current.name].render(content, current.params, ctx, signal);
+		if (signal.aborted) return;
 		content.scrollTop = restoreScroll;
 	} catch (err) {
 		console.error(err);
