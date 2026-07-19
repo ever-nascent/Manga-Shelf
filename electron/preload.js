@@ -26,6 +26,12 @@ contextBridge.exposeInMainWorld('api', {
 	retryDownload: invoke('dl:retry'),
 	getQueue: invoke('dl:queue'),
 	clearFinishedDownloads: invoke('dl:clearFinished'),
+	onDownloadsResumed: (cb) => ipcRenderer.on('dl:resumed', (_e, n) => cb(n)),
+
+	// quit prompt: main asks, the renderer answers 'pause' | 'cancel' | 'stay'
+	onQuitConfirm: (cb) => ipcRenderer.on('quit:confirm', (_e, info) => cb(info)),
+	quitPromptShown: () => ipcRenderer.send('quit:shown'),
+	answerQuit: (choice) => ipcRenderer.send('quit:answer', choice),
 	onQueueUpdate: (cb) => {
 		const listener = (_e, queue) => cb(queue);
 		ipcRenderer.on('dl:updated', listener);

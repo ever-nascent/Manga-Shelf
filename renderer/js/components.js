@@ -103,6 +103,64 @@ export function openModal(title) {
 	return { body, close };
 }
 
+// ---------- quit confirmation (downloads still running) ----------
+
+// Resolves with 'pause' | 'cancel' | 'stay'. Dismissing (Escape, backdrop,
+// close button) counts as 'stay' — the safe answer, since the other two exit.
+export function confirmQuitWithDownloads(active) {
+	return new Promise((resolve) => {
+		let answered = false;
+		const answer = (choice) => {
+			if (answered) return;
+			answered = true;
+			backdrop.remove();
+			document.removeEventListener('keydown', onKey, true);
+			resolve(choice);
+		};
+
+		const n = active === 1 ? '1 chapter is' : `${active} chapters are`;
+		const choice = (cls, iconName, label, hint, value) => h('button',
+			{ class: `btn quit-choice ${cls}`, onclick: () => answer(value) },
+			icon(iconName, 16),
+			h('span', {},
+				h('b', {}, label),
+				h('small', {}, hint))
+		);
+
+		const backdrop = h('div', { class: 'modal-backdrop' },
+			h('div', { class: 'modal-dialog quit-dialog' },
+				h('div', { class: 'modal-head' },
+					h('h2', {}, 'Downloads in progress'),
+					h('button', {
+						class: 'btn icon-only modal-close', title: 'Close',
+						onclick: () => answer('stay')
+					}, icon('x', 15))
+				),
+				h('div', { class: 'modal-body' },
+					h('div', { class: 'quit-msg' },
+						`${n} still downloading. The queue isn't kept unless you pause it.`),
+					h('div', { class: 'quit-choices' },
+						choice('primary', 'pause', 'Pause and exit',
+							'Saves the queue and picks up where it left off next launch.', 'pause'),
+						choice('danger', 'trash', 'Cancel downloads and exit',
+							'Clears the queue. Pages already downloaded are kept.', 'cancel'),
+						choice('', 'download', 'Keep downloading',
+							'Stay in the app and let the queue finish.', 'stay')
+					)
+				)
+			)
+		);
+
+		function onKey(e) {
+			if (e.key === 'Escape') { e.stopPropagation(); answer('stay'); }
+		}
+		backdrop.addEventListener('click', (e) => { if (e.target === backdrop) answer('stay'); });
+		document.addEventListener('keydown', onKey, true);
+		document.body.append(backdrop);
+		backdrop.querySelector('.quit-choice').focus();
+	});
+}
+
 // ---------- styled <select> replacement ----------
 
 export function styledSelect({ options, value, onChange, small = false }) {

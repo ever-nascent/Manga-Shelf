@@ -57,6 +57,7 @@ class Library {
 		this.db.reading ??= {};
 		this.db.updates ??= [];
 		this.db.meta ??= {};
+		this.db.pendingQueue ??= [];
 		for (const m of Object.values(this.db.manga)) {
 			if (m.progress && !this.db.reading[m.id]) {
 				this.db.reading[m.id] = {
@@ -232,6 +233,24 @@ class Library {
 	removeReading(mangaId) {
 		delete this.db.reading[mangaId];
 		this.saveDb();
+	}
+
+	// ---------- paused download queue (survives a quit) ----------
+
+	savePendingQueue(jobs) {
+		this.db.pendingQueue = jobs || [];
+		this.saveDb();
+	}
+
+	// Read once and clear: a restore that crashes shouldn't loop forever on the
+	// same queue at every launch.
+	takePendingQueue() {
+		const jobs = this.db.pendingQueue || [];
+		if (jobs.length) {
+			this.db.pendingQueue = [];
+			this.saveDb();
+		}
+		return jobs;
 	}
 
 	// ---------- follows (bookmarks with a status shelf) ----------

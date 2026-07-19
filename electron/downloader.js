@@ -99,6 +99,41 @@ class Downloader {
 		this.notify();
 	}
 
+	hasActiveJobs() {
+		return this.queue.some((j) => j.status === 'queued' || j.status === 'downloading');
+	}
+
+	// Unfinished work, with the full manga/chapter objects a restore needs. The
+	// in-flight job comes back as 'queued': its finished pages are already on
+	// disk and get skipped, so restarting it costs nothing.
+	pendingJobs() {
+		return this.queue
+			.filter((j) => j.status === 'queued' || j.status === 'downloading')
+			.map((j) => ({ manga: j.manga, chapter: j.chapter }));
+	}
+
+	// Re-queue jobs saved by a previous session and start downloading.
+	restore(saved) {
+		if (!Array.isArray(saved) || !saved.length) return 0;
+		let added = 0;
+		for (const { manga, chapter } of saved) {
+			if (!manga?.id || !chapter?.id) continue;
+			if (this.library.hasChapter(manga.id, chapter.id)) continue;
+			this.queue.push({
+				id: ++this.counter,
+				manga,
+				chapter,
+				status: 'queued',
+				done: 0,
+				total: chapter.pages || 0,
+				error: null
+			});
+			added++;
+		}
+		if (added) { this.notify(); this.run(); }
+		return added;
+	}
+
 	async run() {
 		if (this.running) return;
 		this.running = true;

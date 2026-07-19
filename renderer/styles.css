@@ -513,6 +513,29 @@ select option { background: var(--panel); }
 }
 .modal-head h2 { font-size: 16px; margin: 0; }
 .modal-body { padding: 18px; overflow-y: auto; }
+
+/* quit prompt: one stacked button per choice, each with a hint line */
+.quit-dialog { width: min(460px, calc(100vw - 40px)); }
+.quit-msg { color: var(--muted); margin-bottom: 16px; line-height: 1.5; }
+.quit-choices { display: flex; flex-direction: column; gap: 10px; }
+.quit-choice {
+	display: flex;
+	align-items: flex-start;
+	gap: 12px;
+	width: 100%;
+	padding: 12px 14px;
+	text-align: left;
+}
+.quit-choice svg { flex: none; margin-top: 2px; }
+.quit-choice b { display: block; font-weight: 600; }
+.quit-choice small {
+	display: block;
+	margin-top: 3px;
+	font-size: 12px;
+	font-weight: 400;
+	opacity: .78;
+	line-height: 1.45;
+}
 .alt-source-row {
 	display: flex;
 	gap: 12px;

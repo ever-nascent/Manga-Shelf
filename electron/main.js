@@ -25,6 +25,8 @@ let splash = null;
 let library = null;
 let downloader = null;
 let cache = null;
+let quitConfirmed = false; // set once the user has answered the quit prompt
+let quitPromptOpen = false;
 
 // Standard-scheme URLs need a (dummy) host — Chromium rejects an empty
 // authority, which silently broke every local cover/page image before.
@@ -82,6 +84,14 @@ function createWindow() {
 	const revealTimer = setTimeout(reveal, 8000);
 	ipcMain.once('app:ready', () => { clearTimeout(revealTimer); reveal(); });
 
+	// Downloads live in memory, so closing mid-queue would silently discard
+	// them. Intercept the close and let the renderer ask what to do.
+	win.on('close', (e) => {
+		if (quitConfirmed || !downloader?.hasActiveJobs()) return;
+		e.preventDefault();
+		askBeforeQuit();
+	});
+
 	if (DEV) {
 		win.webContents.openDevTools({ mode: 'detach' });
 		win.webContents.setBackgroundThrottling(false); // keep frames fresh for /shot even when occluded
@@ -89,6 +99,47 @@ function createWindow() {
 			console.log(`[renderer:${level}] ${message} (${path.basename(sourceId || '')}:${line})`);
 		});
 		startDevControlServer();
+	}
+}
+
+// Ask the renderer to show the "downloads in progress" prompt and act on the
+// answer. Falls back to pausing if the renderer can't answer, so a wedged UI
+// can never trap the user in an app that refuses to close.
+function askBeforeQuit() {
+	if (quitPromptOpen) return;
+	quitPromptOpen = true;
+
+	const active = downloader.pendingJobs().length;
+	const finish = (choice) => {
+		if (!quitPromptOpen) return;
+		quitPromptOpen = false;
+		clearTimeout(bailout);
+		ipcMain.removeListener('quit:answer', onAnswer);
+		ipcMain.removeListener('quit:shown', onShown);
+
+		if (choice === 'stay') return;
+		// 'pause' keeps the queue for next launch; 'cancel' just drops it
+		library.savePendingQueue(choice === 'pause' ? downloader.pendingJobs() : []);
+		quitConfirmed = true;
+		if (win && !win.isDestroyed()) win.destroy();
+	};
+
+	const onAnswer = (_e, choice) => finish(choice);
+	ipcMain.once('quit:answer', onAnswer);
+
+	// The bailout is for a renderer that can't draw the prompt (hung, crashed,
+	// paused in devtools) — never for a user taking their time. Once the
+	// renderer confirms the dialog is up, we wait as long as it takes.
+	const bailout = setTimeout(() => finish('pause'), 4000);
+	const onShown = () => clearTimeout(bailout);
+	ipcMain.once('quit:shown', onShown);
+
+	if (win && !win.isDestroyed()) {
+		win.webContents.send('quit:confirm', { active });
+		if (win.isMinimized()) win.restore();
+		win.focus();
+	} else {
+		finish('pause');
 	}
 }
 
@@ -110,6 +161,13 @@ function startDevControlServer() {
 						res.end(JSON.stringify({ ok: false, error: String(err) }));
 					}
 				});
+				return;
+			}
+			// exercises the same path as the titlebar X (renderer window.close()
+			// does not, so quit-prompt tests need this)
+			if (u.pathname === '/close') {
+				res.end(JSON.stringify({ ok: true }));
+				setTimeout(() => win.close(), 50);
 				return;
 			}
 			if (u.pathname === '/shot') {
@@ -344,6 +402,17 @@ app.whenReady().then(() => {
 
 	registerIpc();
 	createWindow();
+
+	// resume whatever "Pause & exit" left behind last time
+	const paused = library.takePendingQueue();
+	if (paused.length) {
+		const restored = downloader.restore(paused);
+		if (restored) {
+			ipcMain.once('app:ready', () => {
+				if (win && !win.isDestroyed()) win.webContents.send('dl:resumed', restored);
+			});
+		}
+	}
 
 	// warm the cache right away so Home/Browse paint instantly
 	setTimeout(() => {

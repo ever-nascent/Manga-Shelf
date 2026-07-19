@@ -14,6 +14,7 @@ const PATHS = {
 	bookmark: '<path d="M6.8 4.5h10.4v15.4l-5.2-3.5-5.2 3.5z"/>',
 	'bookmark-filled': '<path d="M6.8 4.5h10.4v15.4l-5.2-3.5-5.2 3.5z" fill="currentColor"/>',
 	play: '<path d="M8.5 5.8v12.4l10-6.2z" fill="currentColor" stroke-width="1.5"/>',
+	pause: '<path d="M9 5.8v12.4M15 5.8v12.4" stroke-width="2.6" stroke-linecap="round"/>',
 	check: '<path d="M4.8 12.6l4.6 4.6 9.8-10.4"/>',
 	x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
 	trash: '<path d="M4.5 7h15"/><path d="M9.3 7V5.4c0-.7.6-1.3 1.3-1.3h2.8c.7 0 1.3.6 1.3 1.3V7"/><path d="M6.7 7l.9 12.5h8.8L17.3 7"/><path d="M10.1 10.7v5.4M13.9 10.7v5.4"/>',

@@ -8,7 +8,7 @@ import * as updates from './views/updates.js';
 import { openReader } from './views/reader.js';
 import { clear, toast } from './util.js';
 import { icon } from './icons.js';
-import { closeActiveMenu } from './components.js';
+import { closeActiveMenu, confirmQuitWithDownloads } from './components.js';
 
 const views = { home, browse, detail, library, downloads, settings, updates };
 const NAV_ICONS = { home: 'home', browse: 'compass', library: 'books', updates: 'bell', downloads: 'download', settings: 'gear' };
@@ -96,6 +96,21 @@ function applyQueue(queue) {
 
 window.api.onQueueUpdate(applyQueue);
 window.api.getQueue().then(applyQueue);
+
+// a paused queue from last session was restored and is downloading again
+window.api.onDownloadsResumed((n) => {
+	toast(`Resumed ${n} paused download${n === 1 ? '' : 's'}.`, 'info', 5000);
+});
+
+// closing with downloads running: main asks, we answer
+window.api.onQuitConfirm(({ active }) => {
+	closeActiveMenu();
+	// the dialog is in the DOM as soon as this returns; tell main so it stops
+	// counting down and waits for a real answer
+	const answered = confirmQuitWithDownloads(active);
+	window.api.quitPromptShown();
+	answered.then((choice) => window.api.answerQuit(choice));
+});
 
 // new-chapter notifications from the startup check
 const upBadge = document.getElementById('up-badge');
