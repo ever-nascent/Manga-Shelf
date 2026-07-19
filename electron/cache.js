@@ -8,7 +8,7 @@
 // list without waiting on the network at all.
 
 const fs = require('fs');
-const path = require('path');
+const { writeFileAtomic } = require('./util');
 
 class ApiCache {
 	constructor(file) {
@@ -77,7 +77,7 @@ class ApiCache {
 				if (this.map.has(k)) out[k] = this.map.get(k);
 			}
 			try {
-				fs.writeFileSync(this.file, JSON.stringify(out));
+				writeFileAtomic(this.file, JSON.stringify(out));
 			} catch (err) {
 				console.error('Cache save failed:', err.message);
 			}

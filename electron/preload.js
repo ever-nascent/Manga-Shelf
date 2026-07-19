@@ -3,6 +3,9 @@ const { contextBridge, ipcRenderer } = require('electron');
 const invoke = (channel) => (...args) => ipcRenderer.invoke(channel, ...args);
 
 contextBridge.exposeInMainWorld('api', {
+	// tells main the first screen has actually painted — swaps the splash for this window
+	notifyReady: () => ipcRenderer.send('app:ready'),
+
 	// discovery
 	getHome: invoke('md:home'),
 	getTags: invoke('md:tags'),
@@ -69,7 +72,6 @@ contextBridge.exposeInMainWorld('api', {
 	// app updates
 	getAppVersion: invoke('app:version'),
 	checkForAppUpdates: invoke('app:checkForUpdates'),
-	restartToUpdate: invoke('app:restartToUpdate'),
 	onAppUpdate: (cb) => {
 		const listener = (_e, evt) => cb(evt);
 		ipcRenderer.on('app-update:event', listener);

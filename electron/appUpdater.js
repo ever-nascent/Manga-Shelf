@@ -7,7 +7,9 @@
 const { autoUpdater } = require('electron-updater');
 
 autoUpdater.autoDownload = true;
-autoUpdater.autoInstallOnAppQuit = false;
+// Install silently the next time the user closes the app naturally — no
+// restart prompt, no banner. They just open a current build next time.
+autoUpdater.autoInstallOnAppQuit = true;
 
 // sendEvent receives {type: 'checking'|'available'|'none'|'progress'|'downloaded'|'error', ...}
 function initAutoUpdater(sendEvent) {
@@ -23,8 +25,4 @@ function checkForUpdates() {
 	return autoUpdater.checkForUpdates().catch((err) => console.error('Update check failed:', err.message));
 }
 
-function quitAndInstall() {
-	autoUpdater.quitAndInstall();
-}
-
-module.exports = { initAutoUpdater, checkForUpdates, quitAndInstall };
+module.exports = { initAutoUpdater, checkForUpdates };

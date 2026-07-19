@@ -1,0 +1,70 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; style-src 'unsafe-inline'">
+<title>MangaShelf</title>
+<style>
+	html, body {
+		margin: 0;
+		height: 100%;
+		background: transparent;
+		overflow: hidden;
+		font-family: "Segoe UI", system-ui, -apple-system, sans-serif;
+	}
+	.card {
+		width: 100%;
+		height: 100%;
+		box-sizing: border-box;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 18px;
+		background: #131622;
+		border: 1px solid #2a3047;
+		border-radius: 20px;
+		-webkit-app-region: drag;
+	}
+	.logo {
+		display: flex;
+		align-items: center;
+		gap: 8px;
+		color: #e9ebf4;
+		font-size: 19px;
+		font-weight: 600;
+	}
+	.logo b { color: #ff6a3d; }
+	.bar {
+		width: 140px;
+		height: 4px;
+		border-radius: 2px;
+		background: #2a3047;
+		overflow: hidden;
+	}
+	.bar div {
+		width: 40%;
+		height: 100%;
+		border-radius: 2px;
+		background: #ff6a3d;
+		animation: slide 1.1s ease-in-out infinite;
+	}
+	@keyframes slide {
+		0% { transform: translateX(-100%); }
+		100% { transform: translateX(350%); }
+	}
+</style>
+</head>
+<body>
+	<div class="card">
+		<div class="logo">
+			<svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+				<path d="M2 4c3-1.5 6-1.5 9 0v16c-3-1.5-6-1.5-9 0z" fill="rgba(255,106,61,.25)"/>
+				<path d="M22 4c-3-1.5-6-1.5-9 0v16c3-1.5 6-1.5 9 0z" fill="rgba(255,176,61,.2)"/>
+			</svg>
+			<span>Manga<b>Shelf</b></span>
+		</div>
+		<div class="bar"><div></div></div>
+	</div>
+</body>
+</html>

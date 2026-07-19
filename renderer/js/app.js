@@ -16,6 +16,7 @@ const content = document.getElementById('content');
 
 const stack = [];
 let current = null;
+let firstRenderDone = false;
 
 export const ctx = {
 	navigate,
@@ -51,6 +52,13 @@ async function render(restoreScroll = 0) {
 		content.scrollTop = restoreScroll;
 	} catch (err) {
 		console.error(err);
+	} finally {
+		// reveal the window on the first render only, success or failure —
+		// an error shouldn't leave the user stuck looking at the splash
+		if (!firstRenderDone) {
+			firstRenderDone = true;
+			window.api.notifyReady();
+		}
 	}
 }
 
@@ -101,27 +109,12 @@ window.api.onNavigate((view) => {
 	}
 });
 
-// app self-update: quietly downloads in the background, then offers a restart
-const updateBanner = document.getElementById('update-banner');
+// app self-update: checks + downloads silently in the background, installs
+// itself the next time the app quits normally — nothing for the user to see
+// or act on. Settings > About still surfaces status for anyone who looks.
 window.api.onAppUpdate((evt) => {
 	window.dispatchEvent(new CustomEvent('app-update-event', { detail: evt }));
-	if (evt.type === 'available') {
-		toast(`Update v${evt.version} found — downloading…`, 'info', 4000);
-	} else if (evt.type === 'downloaded') {
-		clear(updateBanner);
-		updateBanner.classList.remove('hidden');
-		updateBanner.append(
-			`v${evt.version} ready — `,
-			(() => {
-				const btn = document.createElement('button');
-				btn.textContent = 'Restart to update';
-				btn.addEventListener('click', () => window.api.restartToUpdate());
-				return btn;
-			})()
-		);
-	} else if (evt.type === 'error') {
-		console.error('Update check failed:', evt.message);
-	}
+	if (evt.type === 'error') console.error('Update check failed:', evt.message);
 });
 
 navigate('home', {}, { push: false });

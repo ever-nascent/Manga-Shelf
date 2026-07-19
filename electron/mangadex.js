@@ -1,21 +1,12 @@
 // MangaDex API client. Docs: https://api.mangadex.org/docs/
 // MangaDex asks for a descriptive User-Agent and <5 requests/sec.
 
+const { USER_AGENT, sleep, makeRateLimiter, fetchImage } = require('./util');
+
 const API_BASE = 'https://api.mangadex.org';
 const COVER_BASE = 'https://uploads.mangadex.org/covers';
-const USER_AGENT = 'MangaShelf/2.0 (personal desktop reader; github.com/LiterallyLink/Manga-Downloader)';
 
-const MIN_REQUEST_GAP_MS = 250;
-let nextSlot = 0;
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function rateLimit() {
-	const now = Date.now();
-	const wait = Math.max(0, nextSlot - now);
-	nextSlot = Math.max(now, nextSlot) + MIN_REQUEST_GAP_MS;
-	if (wait > 0) await sleep(wait);
-}
+const rateLimit = makeRateLimiter(250);
 
 function buildUrl(path, params = {}) {
 	const url = new URL(API_BASE + path);
@@ -260,18 +251,6 @@ async function getChapterImageUrls(chapterId, quality = 'data') {
 	const files = quality === 'data-saver' ? json.chapter.dataSaver : json.chapter.data;
 	const dir = quality === 'data-saver' ? 'data-saver' : 'data';
 	return files.map((f) => `${baseUrl}/${dir}/${hash}/${f}`);
-}
-
-async function fetchImage(url, attempt = 1) {
-	const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-	if (!res.ok) {
-		if (attempt <= 3) {
-			await sleep(1000 * attempt);
-			return fetchImage(url, attempt + 1);
-		}
-		throw new Error(`Image download failed (${res.status}): ${url}`);
-	}
-	return Buffer.from(await res.arrayBuffer());
 }
 
 module.exports = {

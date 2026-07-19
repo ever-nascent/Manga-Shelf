@@ -8,21 +8,11 @@
 // Both map straight back to a URL under BASE.
 
 const cheerio = require('cheerio');
+const { USER_AGENT, sleep, makeRateLimiter, fetchImage } = require('./util');
 
 const BASE = 'https://mangakatana.com';
-const USER_AGENT = 'MangaShelf/2.0 (personal desktop reader; github.com/LiterallyLink/Manga-Downloader)';
 
-const MIN_REQUEST_GAP_MS = 400;
-let nextSlot = 0;
-
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
-
-async function rateLimit() {
-	const now = Date.now();
-	const wait = Math.max(0, nextSlot - now);
-	nextSlot = Math.max(now, nextSlot) + MIN_REQUEST_GAP_MS;
-	if (wait > 0) await sleep(wait);
-}
+const rateLimit = makeRateLimiter(400);
 
 async function htmlFetch(url, attempt = 1) {
 	await rateLimit();
@@ -194,18 +184,6 @@ async function getChapterImageUrls(chapterId) {
 	}
 	if (!urls.length) throw new Error('No page images found for this chapter.');
 	return urls;
-}
-
-async function fetchImage(url, attempt = 1) {
-	const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-	if (!res.ok) {
-		if (attempt <= 3) {
-			await sleep(1000 * attempt);
-			return fetchImage(url, attempt + 1);
-		}
-		throw new Error(`Image download failed (${res.status}): ${url}`);
-	}
-	return Buffer.from(await res.arrayBuffer());
 }
 
 module.exports = {

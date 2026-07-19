@@ -533,29 +533,6 @@ select option { background: var(--panel); }
 .alt-source-form { display: flex; gap: 8px; margin-bottom: 14px; }
 .alt-source-form input { flex: 1; }
 
-/* ============ update banner (sidebar) ============ */
-.update-banner {
-	margin: 0 14px 12px;
-	padding: 10px 12px;
-	border-radius: var(--radius);
-	background: var(--accent-soft);
-	border: 1px solid var(--accent);
-	color: var(--text);
-	font-size: 12.5px;
-	line-height: 1.5;
-}
-.update-banner button {
-	display: block;
-	width: 100%;
-	margin-top: 6px;
-	padding: 6px 10px;
-	border-radius: 7px;
-	background: var(--accent);
-	color: #fff;
-	font-weight: 600;
-	font-size: 12.5px;
-}
-
 /* styled select */
 .select-btn { justify-content: space-between; gap: 9px; min-width: 130px; font-weight: 500; }
 .select-btn .select-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -701,6 +678,9 @@ select option { background: var(--panel); }
 	width: min(var(--strip-width, 760px), 100%);
 	min-height: 200px;
 }
+/* pages that haven't loaded yet hold a taller placeholder so resuming
+   mid-chapter lands close to the right spot before images arrive */
+.reader-scroll.vertical .r-page.r-pending { min-height: 65vh; }
 
 /* paged mode */
 .reader-scroll.paged {

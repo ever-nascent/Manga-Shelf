@@ -1,4 +1,4 @@
-import { h, clear, toast, dedupeChapters, STATUS_LABEL } from './util.js';
+import { h, clear, toast, dedupeChapters, resumeIndex, STATUS_LABEL } from './util.js';
 import { icon } from './icons.js';
 
 const FALLBACK_COVER =
@@ -183,8 +183,7 @@ export async function quickRead(ctx, manga) {
 		let idx = 0;
 		let page = 0;
 		if (reading) {
-			let found = list.findIndex((c) => c.id === reading.chapterId);
-			if (found === -1 && reading.chapterNum != null) found = list.findIndex((c) => c.num === reading.chapterNum);
+			const found = resumeIndex(list, reading.chapterId, reading.chapterNum);
 			if (found >= 0) { idx = found; page = reading.page || 0; }
 		}
 		ctx.openReader(manga, list, idx, page);

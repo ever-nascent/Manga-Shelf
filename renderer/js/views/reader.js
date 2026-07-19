@@ -97,6 +97,41 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	function updateIndicator() {
 		pageInd.textContent = pages.length ? `${page + 1} / ${pages.length}` : '';
 		saveProgress();
+		pumpLoads(); // keep page fetching prioritized around wherever the reader is
+	}
+
+	// ---------- staggered page loading ----------
+	// Pages are appended without src and fetched a few at a time, nearest to the
+	// current page first — opening a 180-page chapter shouldn't burst 180
+	// simultaneous requests at the image server.
+	const LOAD_CONCURRENCY = 4;
+	let loadGen = 0; // bumped per chapter so stale onload callbacks are ignored
+	let inFlight = 0;
+
+	function nextPending() {
+		const els = imgs();
+		for (let i = page; i < els.length; i++) if (els[i].dataset.src) return els[i];
+		for (let i = Math.min(page, els.length - 1); i >= 0; i--) if (els[i].dataset.src) return els[i];
+		return null;
+	}
+
+	function pumpLoads() {
+		const gen = loadGen;
+		while (inFlight < LOAD_CONCURRENCY) {
+			const el = nextPending();
+			if (!el) return;
+			inFlight++;
+			const done = () => {
+				el.classList.remove('r-pending');
+				if (gen !== loadGen) return;
+				inFlight--;
+				pumpLoads();
+			};
+			el.addEventListener('load', done, { once: true });
+			el.addEventListener('error', done, { once: true });
+			el.src = el.dataset.src;
+			delete el.dataset.src;
+		}
 	}
 
 	// ---------- page display ----------
@@ -144,6 +179,8 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		if (newIndex < 0) { toast('This is the first chapter.'); return; }
 		if (newIndex >= chapterList.length) { toast('No more chapters — you\'re all caught up!', 'success'); return; }
 		chIndex = newIndex;
+		loadGen++;
+		inFlight = 0;
 		chapterSelect.set(chIndex);
 		const ch = chapterList[chIndex];
 		titleEl.textContent = `${manga.title} — ${ch.num ? `Ch. ${ch.num}` : (ch.title || 'Oneshot')}`;
@@ -166,7 +203,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 
 			clear(scroll);
 			for (const url of urls) {
-				scroll.append(h('img', { class: 'r-page', src: url, draggable: false }));
+				scroll.append(h('img', { class: 'r-page r-pending', dataset: { src: url }, draggable: false }));
 			}
 			if (prefs.mode === 'vertical') {
 				scroll.append(h('div', { class: 'chapter-end' },
@@ -178,6 +215,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 			}
 
 			page = startAt === 'last' ? pages.length - 1 : (startAt || 0);
+			pumpLoads();
 			applyModeClassesOnly();
 			showPage(true);
 			if (prefs.mode === 'vertical' && page === 0) scroll.scrollTop = 0;
@@ -204,7 +242,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	window.addEventListener('keydown', onKey);
 
 	function close() {
-		saveProgress.flush?.();
+		saveProgress.flush();
 		window.removeEventListener('keydown', onKey);
 		clearTimeout(fadeTimer);
 		readerEl.classList.add('hidden');

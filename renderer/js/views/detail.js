@@ -1,4 +1,4 @@
-import { h, clear, spinner, errorBox, fmtNum, fmtDate, toast, STATUS_LABEL, dedupeChapters } from '../util.js';
+import { h, clear, spinner, errorBox, fmtNum, fmtDate, toast, STATUS_LABEL, dedupeChapters, resumeIndex } from '../util.js';
 import { mangaCard, coverImg, openMenu, openModal, styledSelect, quickRead, discoverQuickActions, FOLLOW_STATUSES, followStatusLabel } from '../components.js';
 import { icon } from '../icons.js';
 
@@ -212,8 +212,7 @@ export async function render(root, params, ctx) {
 
 	function openReaderAt(chapter, page = 0) {
 		const list = readingListNow();
-		let index = list.findIndex((c) => c.id === chapter.id);
-		if (index === -1) index = list.findIndex((c) => c.num === chapter.num);
+		const index = resumeIndex(list, chapter.id, chapter.num);
 		if (index === -1) { toast('This chapter has no readable pages.', 'error'); return; }
 		ctx.openReader(manga, list, index, page);
 	}
@@ -222,8 +221,7 @@ export async function render(root, params, ctx) {
 		const list = readingListNow();
 		if (!list.length) { toast('No readable chapters available.', 'error'); return; }
 		if (reading) {
-			let idx = list.findIndex((c) => c.id === reading.chapterId);
-			if (idx === -1 && reading.chapterNum != null) idx = list.findIndex((c) => c.num === reading.chapterNum);
+			const idx = resumeIndex(list, reading.chapterId, reading.chapterNum);
 			ctx.openReader(manga, list, Math.max(0, idx), reading.page || 0);
 		} else {
 			ctx.openReader(manga, list, 0, 0);

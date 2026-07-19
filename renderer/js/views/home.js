@@ -1,4 +1,4 @@
-import { h, clear, spinner, errorBox, toast, dedupeChapters } from '../util.js';
+import { h, clear, spinner, errorBox, toast, dedupeChapters, resumeIndex } from '../util.js';
 import { mangaCard, discoverQuickActions } from '../components.js';
 import { icon } from '../icons.js';
 
@@ -40,8 +40,7 @@ export async function render(root, params, ctx) {
 			list = (lib?.chapters || []).map((c) => ({ ...c, external: false }));
 		}
 		if (!list.length) { ctx.navigate('detail', { id: entry.manga.id }); return; }
-		let idx = list.findIndex((c) => c.id === entry.chapterId);
-		if (idx === -1 && entry.chapterNum != null) idx = list.findIndex((c) => c.num === entry.chapterNum);
+		const idx = resumeIndex(list, entry.chapterId, entry.chapterNum);
 		ctx.openReader(entry.manga, list, Math.max(0, idx), entry.page || 0);
 	}
 

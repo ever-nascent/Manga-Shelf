@@ -52,12 +52,24 @@ export function fmtDate(iso) {
 	return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
+// The returned function also has .flush(): run a pending call immediately
+// (used by the reader so closing it never drops the last progress save).
 export function debounce(fn, ms) {
 	let t;
-	return (...args) => {
+	let pending = null;
+	const wrapped = (...args) => {
+		pending = args;
 		clearTimeout(t);
-		t = setTimeout(() => fn(...args), ms);
+		t = setTimeout(() => { pending = null; fn(...args); }, ms);
 	};
+	wrapped.flush = () => {
+		if (!pending) return;
+		clearTimeout(t);
+		const args = pending;
+		pending = null;
+		fn(...args);
+	};
+	return wrapped;
 }
 
 export const STATUS_LABEL = {
@@ -71,6 +83,15 @@ export const STATUS_LABEL = {
 export function chapterName(ch) {
 	if (ch.num === null || ch.num === undefined || ch.num === '') return ch.title || 'Oneshot';
 	return `Chapter ${ch.num}${ch.title ? ` — ${ch.title}` : ''}`;
+}
+
+// Where to resume in a chapter list: match by chapter id first, then fall back
+// to the chapter number (the saved id may belong to another group's upload).
+// Returns -1 if neither matches.
+export function resumeIndex(list, chapterId, chapterNum) {
+	let idx = list.findIndex((c) => c.id === chapterId);
+	if (idx === -1 && chapterNum != null) idx = list.findIndex((c) => c.num === chapterNum);
+	return idx;
 }
 
 // Multiple scanlation groups often upload the same chapter; keep one entry per

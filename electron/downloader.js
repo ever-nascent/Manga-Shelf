@@ -20,6 +20,7 @@ class Downloader {
 		this.running = false;
 		this.cancelled = new Set();
 		this.counter = 0;
+		this.lastNotifyAt = 0;
 	}
 
 	snapshot() {
@@ -39,7 +40,15 @@ class Downloader {
 	}
 
 	notify() {
+		this.lastNotifyAt = Date.now();
 		this.onUpdate(this.snapshot());
+	}
+
+	// per-page progress ticks: each notify() serializes the whole queue, so on a
+	// long queue don't broadcast more than ~4×/sec. Status changes (queued /
+	// done / error) still call notify() directly and are never dropped.
+	notifyProgress() {
+		if (Date.now() - this.lastNotifyAt >= 250) this.notify();
 	}
 
 	// manga: normalized manga object; chapters: normalized chapter objects
@@ -154,7 +163,7 @@ class Downloader {
 					fs.writeFileSync(file, buf);
 				}
 				job.done++;
-				this.notify();
+				this.notifyProgress();
 			}
 		};
 		await Promise.all(Array.from({ length: PAGE_CONCURRENCY }, worker));

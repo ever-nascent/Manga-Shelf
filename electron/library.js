@@ -3,6 +3,7 @@
 
 const fs = require('fs');
 const path = require('path');
+const { writeFileAtomic } = require('./util');
 
 const IMAGE_EXTS = new Set(['.jpg', '.jpeg', '.png', '.gif', '.webp']);
 
@@ -72,7 +73,7 @@ class Library {
 	}
 
 	saveDb() {
-		fs.writeFileSync(this.dbFile, JSON.stringify(this.db, null, '\t'));
+		writeFileAtomic(this.dbFile, JSON.stringify(this.db, null, '\t'));
 	}
 
 	getSettings() {
@@ -81,7 +82,7 @@ class Library {
 
 	setSettings(partial) {
 		Object.assign(this.settings, partial);
-		fs.writeFileSync(this.settingsFile, JSON.stringify(this.settings, null, '\t'));
+		writeFileAtomic(this.settingsFile, JSON.stringify(this.settings, null, '\t'));
 		return this.getSettings();
 	}
 

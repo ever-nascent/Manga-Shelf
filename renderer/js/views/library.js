@@ -1,4 +1,4 @@
-import { h, clear, toast, fmtDate, chapterName } from '../util.js';
+import { h, clear, toast, fmtDate, chapterName, resumeIndex } from '../util.js';
 import { mangaCard } from '../components.js';
 import { icon } from '../icons.js';
 
@@ -107,7 +107,7 @@ async function renderManga(root, params, ctx) {
 			if (!readingList.length) return;
 			let idx = 0, page = 0;
 			if (m.progress) {
-				const found = readingList.findIndex((c) => c.id === m.progress.chapterId);
+				const found = resumeIndex(readingList, m.progress.chapterId, m.progress.chapterNum);
 				if (found >= 0) { idx = found; page = m.progress.page || 0; }
 			}
 			ctx.openReader(m, readingList, idx, page);
@@ -132,13 +132,15 @@ async function renderManga(root, params, ctx) {
 					h('button', { class: 'btn', onclick: () => window.api.openMangaFolder(m.id) }, icon('folder', 15), 'Folder'),
 					h('button', {
 						class: 'btn',
+						// currentTarget is null once the handler yields — grab it up front
 						onclick: async (e) => {
-							e.currentTarget.disabled = true;
+							const btn = e.currentTarget;
+							btn.disabled = true;
 							try {
 								const res = await window.api.exportManga(m.id, 'cbz');
 								if (res) toast(`Exported ${res.count} chapters as CBZ.`, 'success');
 							} catch (err) { toast(err.message, 'error'); }
-							e.currentTarget.disabled = false;
+							btn.disabled = false;
 						}
 					}, icon('file', 15), 'Export all (CBZ)'),
 					h('button', {

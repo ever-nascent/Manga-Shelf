@@ -60,8 +60,11 @@ export async function render(root, params, ctx) {
 	let offset = 0;
 	let total = 0;
 	let loading = false;
-	let followSet = new Set();
-	window.api.getFollows().then((f) => { followSet = new Set(f.map((x) => x.manga.id)); }).catch(() => {});
+	// one Set instance mutated in place — quick-action closures hold a reference
+	const followSet = new Set();
+	const followsReady = window.api.getFollows()
+		.then((f) => { for (const x of f) followSet.add(x.manga.id); })
+		.catch(() => {});
 
 	const open = (m) => ctx.navigate('detail', { id: m.id });
 
@@ -87,6 +90,7 @@ export async function render(root, params, ctx) {
 				offset,
 				limit: PAGE_SIZE
 			});
+			await followsReady; // bookmark icons need the follow set before cards render
 			clear(status);
 			total = res.total;
 			offset += res.items.length;

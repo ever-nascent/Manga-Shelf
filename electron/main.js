@@ -21,6 +21,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 let win = null;
+let splash = null;
 let library = null;
 let downloader = null;
 let cache = null;
@@ -37,6 +38,22 @@ function decorateLibraryManga(m) {
 }
 
 function createWindow() {
+	// small frameless splash shown the instant the app launches, so there's
+	// never a blank/white window while the real one loads its first screen
+	splash = new BrowserWindow({
+		width: 260,
+		height: 260,
+		frame: false,
+		transparent: true,
+		resizable: false,
+		movable: false,
+		alwaysOnTop: true,
+		skipTaskbar: true,
+		backgroundColor: '#00000000',
+		webPreferences: { contextIsolation: true }
+	});
+	splash.loadFile(path.join(__dirname, '..', 'renderer', 'splash.html'));
+
 	win = new BrowserWindow({
 		width: 1440,
 		height: 920,
@@ -46,6 +63,7 @@ function createWindow() {
 		autoHideMenuBar: true,
 		title: 'MangaShelf',
 		icon: path.join(__dirname, '..', 'build', 'icon.png'),
+		show: false,
 		webPreferences: {
 			preload: path.join(__dirname, 'preload.js'),
 			contextIsolation: true,
@@ -53,6 +71,16 @@ function createWindow() {
 		}
 	});
 	win.loadFile(path.join(__dirname, '..', 'renderer', 'index.html'));
+
+	// swap splash -> main window once the renderer says its first screen has
+	// actually painted (not just DOM-ready) — with a hard timeout backstop so
+	// a slow or broken load never leaves the user staring at the splash forever
+	const reveal = () => {
+		if (splash && !splash.isDestroyed()) splash.destroy();
+		if (win && !win.isDestroyed()) { win.show(); win.focus(); }
+	};
+	const revealTimer = setTimeout(reveal, 8000);
+	ipcMain.once('app:ready', () => { clearTimeout(revealTimer); reveal(); });
 
 	if (DEV) {
 		win.webContents.openDevTools({ mode: 'detach' });
@@ -131,7 +159,7 @@ function registerIpc() {
 	ipcMain.handle('md:byIds', wrap((ids) =>
 		cache.wrap(`byIds:${[...ids].sort().join()}`, 30 * MIN, () => mangadex.getMangaByIds(ids))));
 	ipcMain.handle('md:similar', wrap((manga) =>
-		mangakatana.isMkId(manga.id) ? [] : cache.wrap(`similar:${manga.id}`, 60 * MIN, () => mangadex.getSimilar(manga, cr()))));
+		mangakatana.isMkId(manga.id) ? [] : cache.wrap(`similar:${manga.id}:${cr().join()}`, 60 * MIN, () => mangadex.getSimilar(manga, cr()))));
 	// image URLs expire server-side after a short while, so only a short TTL is safe
 	ipcMain.handle('md:chapterImages', wrap((chapterId) =>
 		cache.wrap(`pages:${chapterId}:${library.getSettings().quality}`, 5 * MIN,
@@ -226,8 +254,6 @@ function registerIpc() {
 		}
 		return appUpdater.checkForUpdates();
 	}));
-	ipcMain.handle('app:restartToUpdate', wrap(() => appUpdater.quitAndInstall()));
-
 	ipcMain.handle('shell:openPath', wrap((p) => shell.openPath(p)));
 	ipcMain.handle('shell:openExternal', wrap((url) => {
 		if (/^https:\/\//.test(url)) shell.openExternal(url);
