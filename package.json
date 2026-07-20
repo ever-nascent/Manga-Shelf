@@ -1,6 +1,6 @@
 {
   "name": "mangashelf",
-  "version": "2.0.3",
+  "version": "2.1.0",
   "description": "Desktop manga browser, downloader, and reader powered by the MangaDex API",
   "main": "electron/main.js",
   "author": "Charmed",
