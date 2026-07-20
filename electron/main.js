@@ -5,13 +5,14 @@ const http = require('http');
 const { pathToFileURL } = require('url');
 
 const mangadex = require('./mangadex');
-const mangakatana = require('./mangakatana');
 const { Library } = require('./library');
 const { Downloader } = require('./downloader');
 const { ApiCache } = require('./cache');
 const exporter = require('./exporter');
 const { checkForUpdates } = require('./updates');
 const appUpdater = require('./appUpdater');
+const { createApi, makePostMap } = require('./api');
+const { RemoteServer, generateToken } = require('./remoteServer');
 
 const DEV = process.argv.includes('--dev');
 
@@ -25,6 +26,8 @@ let splash = null;
 let library = null;
 let downloader = null;
 let cache = null;
+let api = null;
+let remoteServer = null;
 let quitConfirmed = false; // set once the user has answered the quit prompt
 let quitPromptOpen = false;
 let updateReadyVersion = null; // a downloaded update waiting to be installed
@@ -172,9 +175,33 @@ function askBeforeQuit() {
 
 // Dev-only control port (127.0.0.1): lets automated tests drive the real app —
 // POST /eval runs JS in the renderer, GET /shot?file=... saves a screenshot.
+const DEV_CONTROL_PORT = 9310;
+
+// /eval runs arbitrary JS in the renderer, so the port must only answer our own
+// (curl-based) test harness — never a web page. Binding to 127.0.0.1 stops
+// remote machines, but a site open in your normal browser could still reach the
+// port via CSRF or DNS rebinding. A browser-issued fetch always carries at least
+// one of the signals below; curl carries none of them, so this lets the harness
+// through while shutting the browser out.
+function isTrustedLocalCaller(req) {
+	const host = req.headers.host;
+	if (host !== `127.0.0.1:${DEV_CONTROL_PORT}` && host !== `localhost:${DEV_CONTROL_PORT}`) {
+		return false; // DNS rebinding: Host is the attacker's domain, not ours
+	}
+	if (req.headers.origin) return false; // cross-site browser fetch attaches Origin
+	const fetchSite = req.headers['sec-fetch-site'];
+	if (fetchSite && fetchSite !== 'none') return false; // any page-initiated fetch
+	return true;
+}
+
 function startDevControlServer() {
 	const server = http.createServer(async (req, res) => {
 		res.setHeader('Content-Type', 'application/json');
+		if (!isTrustedLocalCaller(req)) {
+			res.statusCode = 403;
+			res.end(JSON.stringify({ ok: false, error: 'forbidden' }));
+			return;
+		}
 		try {
 			const u = new URL(req.url, 'http://127.0.0.1');
 			if (u.pathname === '/eval' && req.method === 'POST') {
@@ -212,88 +239,67 @@ function startDevControlServer() {
 			res.end(JSON.stringify({ ok: false, error: String(err) }));
 		}
 	});
-	server.listen(9310, '127.0.0.1');
+	server.listen(DEV_CONTROL_PORT, '127.0.0.1');
 }
 
-function settingsFor(lib) {
-	const s = lib.getSettings();
-	return { contentRating: s.contentRating, language: s.language };
+// A shared-state change made on one side means the other side's view of it is
+// stale: phone changes push a refresh hint to the desktop renderer, and every
+// change goes to linked phones over SSE (the desktop already updated its own
+// UI, so it only needs to hear about remote-made changes).
+function onDomainChange(domain, source) {
+	if (source !== 'desktop' && win && !win.isDestroyed()) win.webContents.send('remote:changed', domain);
+	remoteServer?.broadcastChange(domain);
+}
+
+async function remoteInfo() {
+	const s = library.getSettings();
+	const running = remoteServer.isRunning();
+	const info = {
+		enabled: Boolean(s.remoteEnabled),
+		running,
+		url: running ? remoteServer.bestUrl() : null,
+		token: s.remoteToken || null,
+		qrDataUrl: null
+	};
+	if (running && s.remoteToken) {
+		const QRCode = require('qrcode');
+		info.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${s.remoteToken}`, {
+			margin: 1, width: 480, color: { dark: '#0e1015ff', light: '#ffffffff' }
+		});
+	}
+	return info;
 }
 
 function registerIpc() {
 	const wrap = (fn) => async (_event, ...args) => fn(...args);
 
-	// ----- discovery (cached: fresh hits skip the network, stale hits refresh in background) -----
-	const cr = () => library.getSettings().contentRating;
-	const MIN = 60_000;
-	ipcMain.handle('md:home', wrap(() =>
-		cache.wrap(`home:${cr().join()}`, 10 * MIN, () => mangadex.getHomeSections(cr()), { persist: true })));
-	ipcMain.handle('md:tags', wrap(() =>
-		cache.wrap('tags', 24 * 60 * MIN, () => mangadex.getTags(), { persist: true })));
-	ipcMain.handle('md:search', wrap((opts) =>
-		cache.wrap(`search:${JSON.stringify(opts)}:${cr().join()}`, 5 * MIN,
-			() => mangadex.searchManga({ ...opts, contentRating: cr() }))));
-	ipcMain.handle('md:manga', wrap((id) =>
-		cache.wrap(`manga:${id}`, 30 * MIN,
-			() => mangakatana.isMkId(id) ? mangakatana.getManga(id) : mangadex.getManga(id))));
-	ipcMain.handle('md:stats', wrap((id) =>
-		mangakatana.isMkId(id) ? null : cache.wrap(`stats:${id}`, 30 * MIN, () => mangadex.getStats(id))));
-	ipcMain.handle('md:chapters', wrap((id) =>
-		cache.wrap(`chapters:${id}:${JSON.stringify(settingsFor(library))}`, 10 * MIN,
-			() => mangakatana.isMkId(id) ? mangakatana.getChapters(id) : mangadex.getChapters(id, settingsFor(library)))));
-	ipcMain.handle('md:byIds', wrap((ids) =>
-		cache.wrap(`byIds:${[...ids].sort().join()}`, 30 * MIN, () => mangadex.getMangaByIds(ids))));
-	ipcMain.handle('md:similar', wrap((manga) =>
-		mangakatana.isMkId(manga.id) ? [] : cache.wrap(`similar:${manga.id}:${cr().join()}`, 60 * MIN, () => mangadex.getSimilar(manga, cr()))));
-	// image URLs expire server-side after a short while, so only a short TTL is safe
-	ipcMain.handle('md:chapterImages', wrap((chapterId) =>
-		cache.wrap(`pages:${chapterId}:${library.getSettings().quality}`, 5 * MIN,
-			() => mangakatana.isMkId(chapterId)
-				? mangakatana.getChapterImageUrls(chapterId)
-				: mangadex.getChapterImageUrls(chapterId, library.getSettings().quality),
-			{ maxStaleMs: 0 })));
+	// ----- shared commands (same registry the phone remote uses) -----
+	const post = makePostMap(library, toMangaFileUrl);
+	for (const name of Object.keys(api.commands)) {
+		ipcMain.handle(name, async (_e, ...args) => {
+			const result = await api.dispatch(name, args, 'desktop');
+			return post[name] ? post[name](result) : result;
+		});
+	}
 
-	// ----- alternative source (manual fallback when MangaDex doesn't have it) -----
-	ipcMain.handle('mk:search', wrap((query) =>
-		cache.wrap(`mk:search:${query}`, 10 * MIN, () => mangakatana.searchManga(query))));
-
-	// ----- downloads -----
-	ipcMain.handle('dl:add', wrap((manga, chapters) => downloader.add(manga, chapters)));
-	ipcMain.handle('dl:cancel', wrap((jobId) => downloader.cancel(jobId)));
-	ipcMain.handle('dl:retry', wrap((jobId) => downloader.retry(jobId)));
-	ipcMain.handle('dl:queue', wrap(() => downloader.snapshot()));
-	ipcMain.handle('dl:clearFinished', wrap(() => downloader.clearFinished()));
-
-	// ----- library -----
-	ipcMain.handle('lib:all', wrap(() => library.getAll().map(decorateLibraryManga)));
-	ipcMain.handle('lib:get', wrap((id) => decorateLibraryManga(library.get(id))));
-	ipcMain.handle('lib:pages', wrap((mangaId, chapterId) => library.getChapterPages(mangaId, chapterId).map(toMangaFileUrl)));
-	ipcMain.handle('lib:removeChapter', wrap((mangaId, chapterId) => library.removeChapter(mangaId, chapterId)));
-	ipcMain.handle('lib:removeManga', wrap((mangaId) => library.removeManga(mangaId)));
-
-	// ----- reading progress (any manga) -----
-	// prefer the local cover when the manga is downloaded, else the stored URL
-	const decorateReading = (r) => {
-		if (!r) return r;
-		const lib = library.get(r.manga.id);
-		const coverUrl = lib?.coverPath ? toMangaFileUrl(lib.coverPath) : r.manga.coverUrl;
-		return { ...r, manga: { ...r.manga, coverUrl } };
-	};
-	ipcMain.handle('reading:set', wrap((mangaSnap, progress) => library.setReading(mangaSnap, progress)));
-	ipcMain.handle('reading:get', wrap((id) => decorateReading(library.getReading(id))));
-	ipcMain.handle('reading:all', wrap(() => library.getReadingAll().map(decorateReading)));
-	ipcMain.handle('reading:remove', wrap((id) => library.removeReading(id)));
-
-	// ----- follows -----
-	ipcMain.handle('follows:set', wrap((manga, status, lastSeenNum) => library.follow(manga, status, lastSeenNum)));
-	ipcMain.handle('follows:remove', wrap((id) => library.unfollow(id)));
-	ipcMain.handle('follows:get', wrap((id) => library.getFollow(id)));
-	ipcMain.handle('follows:all', wrap(() => library.getFollowsAll()));
-
-	// ----- updates feed -----
-	ipcMain.handle('updates:check', wrap(() => checkForUpdates(library)));
-	ipcMain.handle('updates:feed', wrap(() => library.getUpdatesFeed()));
-	ipcMain.handle('follows:setNotify', wrap((id, on) => library.setNotify(id, on)));
+	// ----- phone remote (pair/unpair lives on the desktop only) -----
+	ipcMain.handle('remote:info', wrap(() => remoteInfo()));
+	ipcMain.handle('remote:setEnabled', wrap(async (on) => {
+		if (on) {
+			if (!library.getSettings().remoteToken) library.setSettings({ remoteToken: generateToken() });
+			library.setSettings({ remoteEnabled: true });
+			await remoteServer.start();
+		} else {
+			library.setSettings({ remoteEnabled: false });
+			remoteServer.stop();
+		}
+		return remoteInfo();
+	}));
+	ipcMain.handle('remote:regenerate', wrap(() => {
+		library.setSettings({ remoteToken: generateToken() });
+		remoteServer.dropClients(); // every phone re-pairs with the new code
+		return remoteInfo();
+	}));
 
 	// ----- exports -----
 	ipcMain.handle('export:chapter', async (_e, mangaId, chapterId, format) => {
@@ -394,6 +400,7 @@ async function runAutoCheck(minIntervalMs) {
 		const result = await checkForUpdates(library);
 		if (result.added > 0) {
 			if (win && !win.isDestroyed()) win.webContents.send('updates:found', result);
+			remoteServer?.broadcastChange('updates');
 			if (library.getSettings().notifications) showChapterNotification(result.fresh);
 		}
 	} catch (err) {
@@ -410,7 +417,13 @@ app.whenReady().then(() => {
 	cache = new ApiCache(path.join(app.getPath('userData'), 'api-cache.json'));
 	downloader = new Downloader(library, (queue) => {
 		if (win && !win.isDestroyed()) win.webContents.send('dl:updated', queue);
+		remoteServer?.broadcastQueue(queue);
 	});
+	api = createApi({ library, downloader, cache, onChange: onDomainChange });
+	remoteServer = new RemoteServer({ library, api, downloader });
+	if (library.getSettings().remoteEnabled) {
+		remoteServer.start().catch((err) => console.error('Remote server failed to start:', err.message));
+	}
 
 	protocol.handle('mangafile', (request) => {
 		try {

@@ -16,7 +16,8 @@
     "adm-zip": "^0.5.16",
     "cheerio": "^1.2.0",
     "electron-updater": "^6.8.9",
-    "pdf-lib": "^1.17.1"
+    "pdf-lib": "^1.17.1",
+    "qrcode": "^1.5.4"
   },
   "devDependencies": {
     "electron": "^37.2.0",

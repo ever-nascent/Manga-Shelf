@@ -125,6 +125,18 @@ window.api.onUpdatesFound((result) => {
 	toast(`${result.added} new chapter${result.added === 1 ? '' : 's'} for manga you follow!`, 'success', 6000);
 });
 
+// a linked phone changed shared state (follows, reading progress, library) —
+// refresh the current view if it displays that data, keeping scroll position
+const REMOTE_AFFECTS = {
+	library: ['home', 'library', 'detail'],
+	follows: ['home', 'library', 'detail', 'updates'],
+	reading: ['home', 'library', 'detail'],
+	updates: ['home', 'updates']
+};
+window.api.onRemoteChanged((domain) => {
+	if ((REMOTE_AFFECTS[domain] || []).includes(current?.name)) render(current.scroll);
+});
+
 // clicking a desktop notification jumps to a view (e.g. Updates)
 window.api.onNavigate((view) => {
 	if (views[view]) {

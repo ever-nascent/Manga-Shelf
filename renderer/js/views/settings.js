@@ -103,6 +103,61 @@ export async function render(root, params, ctx, signal) {
 		langSelect.el
 	));
 
+	// ----- phone remote -----
+	const fmtCode = (t) => (t ? `${t.slice(0, 4)}-${t.slice(4)}` : '');
+	const qrImg = h('img', { class: 'remote-qr', alt: 'Link QR code' });
+	const urlCode = h('code', {}, '');
+	const linkCode = h('div', { class: 'remote-code' }, '');
+	const remotePanel = h('div', { class: 'remote-panel hidden' },
+		qrImg,
+		h('div', { class: 'remote-details' },
+			h('div', { class: 'hint' }, 'Scan the QR code with your phone camera, or open the address in your phone browser and type the link code.'),
+			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Address'), urlCode),
+			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Link code'), linkCode),
+			h('div', { class: 'settings-row' },
+				h('button', {
+					class: 'btn small',
+					onclick: async () => {
+						applyRemote(await window.api.regenerateRemoteToken());
+						toast('New link code generated. Linked phones must scan again.', 'success');
+					}
+				}, 'Generate new code')
+			)
+		)
+	);
+
+	const applyRemote = (info) => {
+		remoteToggle.checked = info.enabled && info.running;
+		remotePanel.classList.toggle('hidden', !info.running);
+		if (info.running) {
+			qrImg.src = info.qrDataUrl || '';
+			urlCode.textContent = info.url || '';
+			linkCode.textContent = fmtCode(info.token);
+		}
+	};
+
+	const remoteToggle = h('input', {
+		type: 'checkbox',
+		onchange: async (e) => {
+			try {
+				applyRemote(await window.api.setRemoteEnabled(e.target.checked));
+				toast(e.target.checked ? 'Phone access is on for this Wi-Fi network.' : 'Phone access turned off.', 'success');
+			} catch (err) {
+				e.target.checked = false;
+				toast(`Couldn't start phone access: ${err.message}`, 'error');
+			}
+		}
+	});
+
+	root.append(h('div', { class: 'settings-block' },
+		h('h3', {}, 'Phone remote'),
+		h('div', { class: 'hint' },
+			'Use MangaShelf from your phone browser: browse, queue downloads to this PC, and read your library. Works while the app is open and both devices are on the same Wi-Fi network.'),
+		h('label', { class: 'check-row' }, remoteToggle, 'Allow phones to connect'),
+		remotePanel
+	));
+	window.api.getRemoteInfo().then((info) => { if (!signal.aborted) applyRemote(info); });
+
 	// ----- about / updates -----
 	const version = await window.api.getAppVersion();
 	const updateStatus = h('div', { class: 'hint' });

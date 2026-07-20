@@ -654,6 +654,27 @@ select option { background: var(--panel); }
 .check-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; cursor: pointer; }
 .check-row input { accent-color: var(--accent); width: 15px; height: 15px; }
 
+/* phone remote pairing */
+.remote-panel { display: flex; gap: 18px; align-items: flex-start; margin-top: 14px; }
+.remote-qr {
+	width: 172px;
+	height: 172px;
+	flex-shrink: 0;
+	border-radius: 10px;
+	background: #fff;
+	padding: 8px;
+}
+.remote-details { display: flex; flex-direction: column; gap: 10px; min-width: 0; }
+.remote-details .hint { margin-bottom: 0; }
+.remote-label { color: var(--muted); font-size: 12.5px; width: 64px; flex-shrink: 0; }
+.remote-code {
+	font-family: Consolas, "Cascadia Mono", monospace;
+	font-size: 19px;
+	font-weight: 600;
+	letter-spacing: 3px;
+	color: var(--text);
+}
+
 /* ============ reader ============ */
 #reader {
 	position: fixed;

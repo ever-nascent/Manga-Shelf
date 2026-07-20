@@ -86,6 +86,16 @@ contextBridge.exposeInMainWorld('api', {
 		return () => ipcRenderer.removeListener('app-update:event', listener);
 	},
 
+	// phone remote
+	getRemoteInfo: invoke('remote:info'),
+	setRemoteEnabled: invoke('remote:setEnabled'),
+	regenerateRemoteToken: invoke('remote:regenerate'),
+	onRemoteChanged: (cb) => {
+		const listener = (_e, domain) => cb(domain);
+		ipcRenderer.on('remote:changed', listener);
+		return () => ipcRenderer.removeListener('remote:changed', listener);
+	},
+
 	// settings / shell
 	getSettings: invoke('settings:get'),
 	setSettings: invoke('settings:set'),

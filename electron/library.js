@@ -29,7 +29,10 @@ class Library {
 			contentRating: ['safe', 'suggestive'],
 			quality: 'data',
 			language: 'en',
-			notifications: true
+			notifications: true,
+			// phone remote: off until enabled in Settings; token is the link code
+			remoteEnabled: false,
+			remoteToken: null
 		};
 		this.db = { version: 2, manga: {} };
 		this.load();
