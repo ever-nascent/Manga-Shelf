@@ -12,7 +12,7 @@ const exporter = require('./exporter');
 const { checkForUpdates } = require('./updates');
 const appUpdater = require('./appUpdater');
 const { createApi, makePostMap } = require('./api');
-const { RemoteServer, generateToken } = require('./remoteServer');
+const { RemoteServer } = require('./remoteServer');
 
 const DEV = process.argv.includes('--dev');
 
@@ -254,16 +254,26 @@ function onDomainChange(domain, source) {
 async function remoteInfo() {
 	const s = library.getSettings();
 	const running = remoteServer.isRunning();
+	const pairing = running ? remoteServer.pairingInfo() : null;
+	const connected = remoteServer.connectedDeviceIds();
 	const info = {
 		enabled: Boolean(s.remoteEnabled),
 		running,
 		url: running ? remoteServer.bestUrl() : null,
-		token: s.remoteToken || null,
+		pairCode: pairing?.code || null,
+		rotatesAt: pairing?.rotatesAt || 0,
+		devices: (s.remoteDevices || []).map((d) => ({
+			id: d.id,
+			name: d.name,
+			createdAt: d.createdAt,
+			lastSeenAt: d.lastSeenAt,
+			connected: connected.has(d.id)
+		})),
 		qrDataUrl: null
 	};
-	if (running && s.remoteToken) {
+	if (running && info.pairCode) {
 		const QRCode = require('qrcode');
-		info.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${s.remoteToken}`, {
+		info.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${info.pairCode}`, {
 			margin: 1, width: 480, color: { dark: '#0e1015ff', light: '#ffffffff' }
 		});
 	}
@@ -282,11 +292,10 @@ function registerIpc() {
 		});
 	}
 
-	// ----- phone remote (pair/unpair lives on the desktop only) -----
+	// ----- phone remote (device management lives on the desktop only) -----
 	ipcMain.handle('remote:info', wrap(() => remoteInfo()));
 	ipcMain.handle('remote:setEnabled', wrap(async (on) => {
 		if (on) {
-			if (!library.getSettings().remoteToken) library.setSettings({ remoteToken: generateToken() });
 			library.setSettings({ remoteEnabled: true });
 			await remoteServer.start();
 		} else {
@@ -295,9 +304,12 @@ function registerIpc() {
 		}
 		return remoteInfo();
 	}));
-	ipcMain.handle('remote:regenerate', wrap(() => {
-		library.setSettings({ remoteToken: generateToken() });
-		remoteServer.dropClients(); // every phone re-pairs with the new code
+	ipcMain.handle('remote:revokeDevice', wrap((id) => {
+		remoteServer.revokeDevice(id);
+		return remoteInfo();
+	}));
+	ipcMain.handle('remote:unlinkAll', wrap(() => {
+		remoteServer.revokeAll();
 		return remoteInfo();
 	}));
 
@@ -424,6 +436,16 @@ app.whenReady().then(() => {
 	});
 	api = createApi({ library, downloader, cache, onChange: onDomainChange });
 	remoteServer = new RemoteServer({ library, api, downloader });
+	// pre-session versions stored a static link token; sessions replaced it
+	if ('remoteToken' in library.getSettings()) library.setSettings({ remoteToken: undefined });
+	// pairing code rotation and device link/unlink both land here — keep the
+	// Settings view live without it having to poll
+	remoteServer.onInfoChanged = async () => {
+		if (!win || win.isDestroyed()) return;
+		try {
+			win.webContents.send('remote:info', await remoteInfo());
+		} catch { /* window mid-teardown */ }
+	};
 	if (library.getSettings().remoteEnabled) {
 		remoteServer.start().catch((err) => console.error('Remote server failed to start:', err.message));
 	}

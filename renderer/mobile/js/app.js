@@ -1,7 +1,7 @@
 // Router + boot: link screen until paired, then tab navigation with the
 // browser history API so the phone's back button works naturally.
 
-import { getToken, setToken, clearToken, rpc, connectEvents, setQueue, sinceLastMutation } from './api.js';
+import { getToken, clearToken, pair, rpc, connectEvents, setQueue, sinceLastMutation } from './api.js';
 import { h, clear } from './util.js';
 import { icon } from './icons.js';
 import * as home from './views/home.js';
@@ -108,16 +108,12 @@ function showLink(message = '') {
 			status.textContent = 'Enter the 8-character code from your PC.';
 			return;
 		}
-		setToken(code);
 		status.textContent = 'Linking…';
 		try {
-			await rpc('dl:queue');
+			await pair(code);
 			startApp();
 		} catch (err) {
-			clearToken();
-			status.textContent = err.message === 'Not linked'
-				? 'That code didn’t match. Check Settings on your PC.'
-				: err.message;
+			status.textContent = pairErrorText(err);
 		}
 	}
 
@@ -140,31 +136,56 @@ function startApp() {
 	navigate('home', {}, { replace: true });
 }
 
-// the PC unlinked us (new code generated) — back to the link screen
+// the PC unlinked us — back to the link screen
 window.addEventListener('remote-unauthorized', () => {
 	if (!linked) return;
 	clearToken();
-	showLink('This phone was unlinked. Enter the new code shown on your PC.');
+	showLink('This phone was unlinked. Scan the QR code on your PC to link again.');
 });
 
-// arriving via the QR code: token rides in the hash
+// The code rotates every minute on the PC, so failures need distinct wording:
+// stale scans are normal, lockout means stop and wait.
+function pairErrorText(err) {
+	if (err.message === 'bad-code') return 'That code didn’t match or has expired. Check Settings on your PC for the current one.';
+	if (err.message === 'locked') return 'Too many attempts. Wait a few minutes, then try the current code.';
+	return err.message;
+}
+
+// arriving via the QR code: a pairing code rides in the hash
+let pendingCode = null;
 function consumeLinkHash() {
 	const fromQr = /link=([A-Z0-9-]+)/i.exec(location.hash);
 	if (!fromQr) return false;
-	setToken(fromQr[1].replace(/-/g, '').toUpperCase());
+	pendingCode = fromQr[1].replace(/-/g, '').toUpperCase();
 	history.replaceState(null, '', location.pathname);
 	return true;
 }
 
 async function boot() {
 	consumeLinkHash();
-	if (!getToken()) return showLink();
-	try {
-		await rpc('dl:queue');
-		startApp();
-	} catch (err) {
-		showLink(err.message === 'Not linked' ? '' : err.message);
+	// an existing session wins over a scanned code — re-scanning the QR on an
+	// already-linked phone shouldn't register it twice
+	if (getToken()) {
+		try {
+			await rpc('dl:queue');
+			pendingCode = null;
+			return startApp();
+		} catch (err) {
+			if (err.message !== 'Not linked') { pendingCode = null; return showLink(err.message); }
+			clearToken();
+		}
 	}
+	if (pendingCode) {
+		const code = pendingCode;
+		pendingCode = null;
+		try {
+			await pair(code);
+			return startApp();
+		} catch (err) {
+			return showLink(pairErrorText(err));
+		}
+	}
+	showLink();
 }
 
 // scanning the QR into an already-open tab only changes the hash — no reload

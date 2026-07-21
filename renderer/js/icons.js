@@ -16,6 +16,7 @@ const PATHS = {
 	play: '<path d="M8.5 5.8v12.4l10-6.2z" fill="currentColor" stroke-width="1.5"/>',
 	pause: '<path d="M9 5.8v12.4M15 5.8v12.4" stroke-width="2.6" stroke-linecap="round"/>',
 	check: '<path d="M4.8 12.6l4.6 4.6 9.8-10.4"/>',
+	phone: '<rect x="7" y="3.5" width="10" height="17" rx="2"/><path d="M10.5 18h3"/>',
 	x: '<path d="M6.5 6.5l11 11M17.5 6.5l-11 11"/>',
 	trash: '<path d="M4.5 7h15"/><path d="M9.3 7V5.4c0-.7.6-1.3 1.3-1.3h2.8c.7 0 1.3.6 1.3 1.3V7"/><path d="M6.7 7l.9 12.5h8.8L17.3 7"/><path d="M10.1 10.7v5.4M13.9 10.7v5.4"/>',
 	folder: '<path d="M3.5 6.3c0-.8.6-1.4 1.4-1.4h3.8l2.4 2.7h8c.8 0 1.4.6 1.4 1.4v9.2c0 .8-.6 1.4-1.4 1.4H4.9c-.8 0-1.4-.6-1.4-1.4z"/>',

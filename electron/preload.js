@@ -94,7 +94,13 @@ contextBridge.exposeInMainWorld('api', {
 	// phone remote
 	getRemoteInfo: invoke('remote:info'),
 	setRemoteEnabled: invoke('remote:setEnabled'),
-	regenerateRemoteToken: invoke('remote:regenerate'),
+	revokeRemoteDevice: invoke('remote:revokeDevice'),
+	unlinkAllRemoteDevices: invoke('remote:unlinkAll'),
+	onRemoteInfo: (cb) => {
+		const listener = (_e, info) => cb(info);
+		ipcRenderer.on('remote:info', listener);
+		return () => ipcRenderer.removeListener('remote:info', listener);
+	},
 	onRemoteChanged: (cb) => {
 		const listener = (_e, domain) => cb(domain);
 		ipcRenderer.on('remote:changed', listener);

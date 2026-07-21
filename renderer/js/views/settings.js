@@ -106,35 +106,93 @@ export async function render(root, params, ctx, signal) {
 
 	// ----- phone remote -----
 	const fmtCode = (t) => (t ? `${t.slice(0, 4)}-${t.slice(4)}` : '');
+	const fmtSeen = (iso) => {
+		if (!iso) return 'never used';
+		const mins = Math.floor((Date.now() - new Date(iso).getTime()) / 60000);
+		if (mins < 2) return 'active just now';
+		if (mins < 60) return `active ${mins} min ago`;
+		const hours = Math.floor(mins / 60);
+		if (hours < 24) return `active ${hours}h ago`;
+		return `last active ${new Date(iso).toLocaleDateString()}`;
+	};
+
 	const qrImg = h('img', { class: 'remote-qr', alt: 'Link QR code' });
 	const urlCode = h('code', {}, '');
 	const linkCode = h('div', { class: 'remote-code' }, '');
+	const codeTimer = h('span', { class: 'remote-timer hint' }, '');
+	const devicesBody = h('div', { class: 'remote-devices-body' });
 	const remotePanel = h('div', { class: 'remote-panel hidden' },
 		qrImg,
 		h('div', { class: 'remote-details' },
-			h('div', { class: 'hint' }, 'Scan the QR code with your phone camera, or open the address in your phone browser and type the link code.'),
+			h('div', { class: 'hint' },
+				'Scan the QR code with your phone camera, or open the address in your phone browser and type the link code. Each phone links once and stays linked.'),
 			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Address'), urlCode),
-			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Link code'), linkCode),
-			h('div', { class: 'settings-row' },
+			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Link code'), linkCode, codeTimer)
+		)
+	);
+	const devicesBlock = h('div', { class: 'remote-devices hidden' },
+		h('h4', {}, 'Linked phones'),
+		devicesBody
+	);
+
+	// countdown to the next code; rotatesAt refreshes with each info push
+	let rotatesAt = 0;
+	const tick = () => {
+		if (!rotatesAt) { codeTimer.textContent = ''; return; }
+		const secs = Math.max(0, Math.ceil((rotatesAt - Date.now()) / 1000));
+		codeTimer.textContent = `new code in ${secs}s`;
+	};
+	const timerId = setInterval(tick, 1000);
+	signal.addEventListener('abort', () => clearInterval(timerId), { once: true });
+
+	const renderDevices = (info) => {
+		clear(devicesBody);
+		if (!info.devices.length) {
+			devicesBody.append(h('div', { class: 'hint' }, 'No phones linked yet.'));
+			return;
+		}
+		for (const d of info.devices) {
+			devicesBody.append(h('div', { class: 'remote-device' },
+				icon('phone', 18),
+				h('div', { class: 'remote-device-info' },
+					h('div', { class: 'remote-device-name' }, d.name),
+					h('div', { class: `remote-device-status${d.connected ? ' online' : ''}` },
+						d.connected ? 'Connected now' : fmtSeen(d.lastSeenAt))
+				),
 				h('button', {
 					class: 'btn small',
 					onclick: async () => {
-						applyRemote(await window.api.regenerateRemoteToken());
-						toast('New link code generated. Linked phones must scan again.', 'success');
+						applyRemote(await window.api.revokeRemoteDevice(d.id));
+						toast(`${d.name} was unlinked.`, 'success');
 					}
-				}, 'Generate new code')
-			)
-		)
-	);
+				}, 'Unlink')
+			));
+		}
+		if (info.devices.length > 1) {
+			devicesBody.append(h('div', { class: 'settings-row' },
+				h('button', {
+					class: 'btn small danger',
+					onclick: async () => {
+						applyRemote(await window.api.unlinkAllRemoteDevices());
+						toast('All phones were unlinked.', 'success');
+					}
+				}, 'Unlink all')
+			));
+		}
+	};
 
 	const applyRemote = (info) => {
 		remoteToggle.checked = info.enabled && info.running;
 		remotePanel.classList.toggle('hidden', !info.running);
+		devicesBlock.classList.toggle('hidden', !info.running && !info.devices.length);
+		rotatesAt = info.running ? info.rotatesAt : 0;
+		tick();
 		if (info.running) {
 			qrImg.src = info.qrDataUrl || '';
 			urlCode.textContent = info.url || '';
-			linkCode.textContent = fmtCode(info.token);
+			linkCode.textContent = fmtCode(info.pairCode);
 		}
+		renderDevices(info);
 	};
 
 	const remoteToggle = h('input', {
@@ -155,8 +213,12 @@ export async function render(root, params, ctx, signal) {
 		h('div', { class: 'hint' },
 			'Use MangaShelf from your phone browser: browse, queue downloads to this PC, and read your library. Works while the app is open and both devices are on the same Wi-Fi network.'),
 		h('label', { class: 'check-row' }, remoteToggle, 'Allow phones to connect'),
-		remotePanel
+		remotePanel,
+		devicesBlock
 	));
+	// pairing code rotation and phones linking/unlinking push fresh info
+	const offRemoteInfo = window.api.onRemoteInfo((info) => { if (!signal.aborted) applyRemote(info); });
+	signal.addEventListener('abort', offRemoteInfo, { once: true });
 	window.api.getRemoteInfo().then((info) => { if (!signal.aborted) applyRemote(info); });
 
 	// ----- storage -----

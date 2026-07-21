@@ -1,5 +1,6 @@
-// Transport to the PC: every command goes to POST /api/<cmd> with the link
-// token; live pushes (queue progress, change pings) arrive over SSE.
+// Transport to the PC: pairing trades the short-lived code from Settings for
+// this phone's own session token, then every command goes to POST /api/<cmd>
+// with it; live pushes (queue progress, change pings) arrive over SSE.
 
 const TOKEN_KEY = 'mstoken';
 
@@ -17,6 +18,35 @@ export function setToken(t) {
 export function clearToken() {
 	localStorage.removeItem(TOKEN_KEY);
 	document.cookie = 'mstoken=; path=/; max-age=0';
+}
+
+// the name this phone shows up as in the PC's linked-devices list
+function deviceName() {
+	const ua = navigator.userAgent;
+	if (/iPhone/.test(ua)) return 'iPhone';
+	if (/iPad/.test(ua) || (/Macintosh/.test(ua) && navigator.maxTouchPoints > 1)) return 'iPad';
+	if (/Android/.test(ua)) return 'Android phone';
+	return 'Phone';
+}
+
+// Exchange a pairing code for a session token. Throws 'bad-code' for a wrong
+// or expired code and 'locked' after too many misses, so the link screen can
+// word each case properly.
+export async function pair(code) {
+	let res;
+	try {
+		res = await fetch('/pair', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ code, name: deviceName() })
+		});
+	} catch {
+		throw new Error('MangaShelf is unreachable. Is it open on your PC?');
+	}
+	const data = await res.json().catch(() => ({}));
+	if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+	setToken(data.token);
+	return data.device;
 }
 
 // Change pings echo back to the phone that made the change; remembering our
