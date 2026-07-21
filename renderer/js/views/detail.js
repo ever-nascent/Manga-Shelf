@@ -1,4 +1,4 @@
-import { h, clear, spinner, errorBox, fmtNum, fmtDate, toast, STATUS_LABEL, dedupeChapters, resumeIndex } from '../util.js';
+import { h, clear, spinner, errorBox, fmtNum, fmtDate, toast, STATUS_LABEL, dedupeChapters, resumeIndex, renderMarkdown } from '../util.js';
 import { mangaCard, coverImg, openMenu, openModal, styledSelect, quickRead, discoverQuickActions, FOLLOW_STATUSES, followStatusLabel } from '../components.js';
 import { icon } from '../icons.js';
 
@@ -129,7 +129,7 @@ export async function render(root, params, ctx, signal) {
 				h('div', { class: 'tags' }, manga.tags.map((t) => manga.id.startsWith('mk:')
 					? h('span', { class: 'chip' }, t.name)
 					: h('button', { class: 'chip', onclick: () => ctx.navigate('browse', { tag: t.id }) }, t.name))),
-				h('div', { class: 'desc' }, manga.description || 'No description.'),
+				h('div', { class: 'desc' }, manga.description ? renderMarkdown(manga.description) : 'No description.'),
 				h('div', { class: 'detail-actions' }, followBtn, bellBtn, readBtn, downloadAllBtn, folderBtn, altSourceBtn)
 			)
 		)

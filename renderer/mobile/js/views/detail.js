@@ -2,7 +2,7 @@
 // reading works for downloaded chapters (served from the PC's library) and
 // online ones (streamed through the PC).
 
-import { h, clear, spinner, errorBox, toast, chapterName, resumeIndex, dedupeChapters, STATUS_LABEL, FOLLOW_STATUSES, followStatusLabel } from '../util.js';
+import { h, clear, spinner, errorBox, toast, chapterName, resumeIndex, dedupeChapters, STATUS_LABEL, FOLLOW_STATUSES, followStatusLabel, renderMarkdown } from '../util.js';
 import { rpc, img, getQueue } from '../api.js';
 import { icon } from '../icons.js';
 
@@ -99,7 +99,7 @@ export async function render(root, { id }, ctx, signal) {
 		[STATUS_LABEL[manga.status], manga.year].filter(Boolean).join(' · ')].filter(Boolean);
 
 	const desc = h('div', { class: 'd-desc clamped', onclick: () => desc.classList.toggle('clamped') },
-		manga.description || '');
+		manga.description ? renderMarkdown(manga.description) : '');
 
 	clear(body);
 	body.append(

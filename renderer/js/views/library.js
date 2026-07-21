@@ -1,4 +1,4 @@
-import { h, clear, toast, fmtDate, chapterName, resumeIndex } from '../util.js';
+import { h, clear, toast, fmtDate, chapterName, resumeIndex, renderMarkdown } from '../util.js';
 import { mangaCard } from '../components.js';
 import { icon } from '../icons.js';
 
@@ -157,7 +157,7 @@ async function renderManga(root, params, ctx, signal) {
 					h('span', {}, `${m.chapters.length} downloaded chapter${m.chapters.length === 1 ? '' : 's'}`),
 					m.authors?.length ? h('span', {}, m.authors.join(', ')) : null
 				),
-				h('div', { class: 'desc' }, m.description || ''),
+				h('div', { class: 'desc' }, m.description ? renderMarkdown(m.description) : ''),
 				h('div', { class: 'detail-actions' },
 					continueBtn,
 					h('button', { class: 'btn', onclick: () => ctx.navigate('detail', { id: m.id }) }, icon('compass', 15), 'Series page'),
