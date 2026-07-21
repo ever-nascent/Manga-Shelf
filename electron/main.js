@@ -13,6 +13,7 @@ const { checkForUpdates } = require('./updates');
 const appUpdater = require('./appUpdater');
 const { createApi, makePostMap } = require('./api');
 const { RemoteServer } = require('./remoteServer');
+const { UpnpMapper } = require('./upnp');
 
 const DEV = process.argv.includes('--dev');
 
@@ -28,6 +29,7 @@ let downloader = null;
 let cache = null;
 let api = null;
 let remoteServer = null;
+let upnp = null;
 let quitConfirmed = false; // set once the user has answered the quit prompt
 let quitPromptOpen = false;
 let updateReadyVersion = null; // a downloaded update waiting to be installed
@@ -251,11 +253,28 @@ function onDomainChange(domain, source) {
 	remoteServer?.broadcastChange(domain);
 }
 
+// Keep the router mapping in step with what the user asked for. Mapping can
+// take seconds (SSDP discovery), so callers fire-and-forget; every state
+// change pushes fresh info to the renderer via onChange.
+async function syncAnywhere() {
+	const want = Boolean(library.getSettings().remoteAnywhere) && remoteServer.isRunning();
+	if (want) {
+		if (!upnp || upnp.port !== remoteServer.port) {
+			await upnp?.unmap().catch(() => {});
+			upnp = new UpnpMapper({ port: remoteServer.port, onChange: () => remoteServer.onInfoChanged?.() });
+		}
+		await upnp.map();
+	} else if (upnp) {
+		await upnp.unmap();
+	}
+}
+
 async function remoteInfo() {
 	const s = library.getSettings();
 	const running = remoteServer.isRunning();
 	const pairing = running ? remoteServer.pairingInfo() : null;
 	const connected = remoteServer.connectedDeviceIds();
+	const anywhereOn = Boolean(s.remoteAnywhere) && running;
 	const info = {
 		enabled: Boolean(s.remoteEnabled),
 		running,
@@ -269,13 +288,24 @@ async function remoteInfo() {
 			lastSeenAt: d.lastSeenAt,
 			connected: connected.has(d.id)
 		})),
-		qrDataUrl: null
+		qrDataUrl: null,
+		anywhere: {
+			enabled: Boolean(s.remoteAnywhere),
+			// mapper not created or no result yet reads as "starting", since
+			// enabled means an attempt is coming
+			status: !anywhereOn ? 'off' : (!upnp || upnp.status() === 'off' ? 'starting' : upnp.status()),
+			url: anywhereOn ? upnp?.url() || null : null,
+			error: anywhereOn ? upnp?.blocked || upnp?.lastError || null : null,
+			qrDataUrl: null
+		}
 	};
 	if (running && info.pairCode) {
 		const QRCode = require('qrcode');
-		info.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${info.pairCode}`, {
-			margin: 1, width: 480, color: { dark: '#0e1015ff', light: '#ffffffff' }
-		});
+		const qrOpts = { margin: 1, width: 480, color: { dark: '#0e1015ff', light: '#ffffffff' } };
+		info.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${info.pairCode}`, qrOpts);
+		if (info.anywhere.url) {
+			info.anywhere.qrDataUrl = await QRCode.toDataURL(`${info.anywhere.url}/#link=${info.pairCode}`, qrOpts);
+		}
 	}
 	return info;
 }
@@ -302,7 +332,13 @@ function registerIpc() {
 			library.setSettings({ remoteEnabled: false });
 			remoteServer.stop();
 		}
+		syncAnywhere().catch(() => {});
 		return remoteInfo();
+	}));
+	ipcMain.handle('remote:setAnywhere', wrap((on) => {
+		library.setSettings({ remoteAnywhere: Boolean(on) });
+		syncAnywhere().catch(() => {});
+		return remoteInfo(); // shows 'starting' now; pushes follow as the router answers
 	}));
 	ipcMain.handle('remote:revokeDevice', wrap((id) => {
 		remoteServer.revokeDevice(id);
@@ -447,7 +483,9 @@ app.whenReady().then(() => {
 		} catch { /* window mid-teardown */ }
 	};
 	if (library.getSettings().remoteEnabled) {
-		remoteServer.start().catch((err) => console.error('Remote server failed to start:', err.message));
+		remoteServer.start()
+			.then(() => syncAnywhere())
+			.catch((err) => console.error('Remote server failed to start:', err.message));
 	}
 
 	protocol.handle('mangafile', (request) => {
@@ -520,6 +558,12 @@ app.whenReady().then(() => {
 	app.on('activate', () => {
 		if (BrowserWindow.getAllWindows().length === 0) createWindow();
 	});
+});
+
+// Best-effort: the process may exit before the router answers, but the
+// mapping's own lease (2h) and the conflict-replace on next start cover it.
+app.on('will-quit', () => {
+	upnp?.unmap().catch(() => {});
 });
 
 app.on('window-all-closed', () => {

@@ -94,6 +94,7 @@ contextBridge.exposeInMainWorld('api', {
 	// phone remote
 	getRemoteInfo: invoke('remote:info'),
 	setRemoteEnabled: invoke('remote:setEnabled'),
+	setRemoteAnywhere: invoke('remote:setAnywhere'),
 	revokeRemoteDevice: invoke('remote:revokeDevice'),
 	unlinkAllRemoteDevices: invoke('remote:unlinkAll'),
 	onRemoteInfo: (cb) => {

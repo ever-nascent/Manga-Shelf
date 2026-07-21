@@ -704,6 +704,12 @@ select option { background: var(--panel); }
 	margin-bottom: 0;
 	min-width: 110px; /* "new code in 60s" at its widest — no shift as it counts down */
 }
+.remote-addr { cursor: pointer; }
+.remote-addr code { border: 1px solid transparent; border-radius: 6px; }
+.remote-addr.active code { border-color: var(--accent); }
+.remote-anywhere-status { margin-bottom: 0; }
+.remote-anywhere-status.err { color: var(--red); }
+.remote-anywhere-hint { margin-top: -4px; }
 .remote-devices { margin-top: 16px; }
 .remote-devices h4 { margin: 0 0 8px; font-size: 13.5px; color: var(--muted); font-weight: 600; }
 .remote-devices-body { display: flex; flex-direction: column; gap: 8px; }

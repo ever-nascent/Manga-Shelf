@@ -118,16 +118,45 @@ export async function render(root, params, ctx, signal) {
 
 	const qrImg = h('img', { class: 'remote-qr', alt: 'Link QR code' });
 	const urlCode = h('code', {}, '');
+	const awayCode = h('code', {}, '');
+	const awayStatus = h('span', { class: 'remote-anywhere-status hint' }, '');
 	const linkCode = h('div', { class: 'remote-code' }, '');
 	const codeTimer = h('span', { class: 'remote-timer hint' }, '');
 	const devicesBody = h('div', { class: 'remote-devices-body' });
+
+	// which address the QR encodes; away is only selectable while it exists
+	let qrSource = 'home';
+	let lastInfo = null;
+	const homeRow = h('div', {
+		class: 'settings-row remote-addr active',
+		title: 'Show the QR for the home address',
+		onclick: () => { qrSource = 'home'; if (lastInfo) applyRemote(lastInfo); }
+	}, h('span', { class: 'remote-label' }, 'Home'), urlCode);
+	const awayRow = h('div', {
+		class: 'settings-row remote-addr hidden',
+		title: 'Show the QR for the away address',
+		onclick: () => { qrSource = 'away'; if (lastInfo) applyRemote(lastInfo); }
+	}, h('span', { class: 'remote-label' }, 'Away'), awayCode, awayStatus);
+
+	const anywhereToggle = h('input', {
+		type: 'checkbox',
+		onchange: async (e) => {
+			applyRemote(await window.api.setRemoteAnywhere(e.target.checked));
+			if (!e.target.checked) toast('Internet access turned off.', 'success');
+		}
+	});
+
 	const remotePanel = h('div', { class: 'remote-panel hidden' },
 		qrImg,
 		h('div', { class: 'remote-details' },
 			h('div', { class: 'hint' },
 				'Scan the QR code with your phone camera, or open the address in your phone browser and type the link code. Each phone links once and stays linked.'),
-			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Address'), urlCode),
-			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Link code'), linkCode, codeTimer)
+			homeRow,
+			awayRow,
+			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Link code'), linkCode, codeTimer),
+			h('label', { class: 'check-row' }, anywhereToggle, 'Also allow connections from the internet'),
+			h('div', { class: 'hint remote-anywhere-hint' },
+				'Asks your router to forward the port (UPnP) so the away address works from any network. Traffic to it is not encrypted, and it stops when this PC or MangaShelf is off.')
 		)
 	);
 	const devicesBlock = h('div', { class: 'remote-devices hidden' },
@@ -182,13 +211,29 @@ export async function render(root, params, ctx, signal) {
 	};
 
 	const applyRemote = (info) => {
+		lastInfo = info;
 		remoteToggle.checked = info.enabled && info.running;
 		remotePanel.classList.toggle('hidden', !info.running);
 		devicesBlock.classList.toggle('hidden', !info.running && !info.devices.length);
 		rotatesAt = info.running ? info.rotatesAt : 0;
 		tick();
 		if (info.running) {
-			qrImg.src = info.qrDataUrl || '';
+			const aw = info.anywhere;
+			anywhereToggle.checked = aw.enabled;
+			awayRow.classList.toggle('hidden', !aw.enabled);
+			if (aw.enabled) {
+				awayCode.textContent = aw.url || '';
+				awayCode.classList.toggle('hidden', !aw.url);
+				awayStatus.textContent =
+					aw.status === 'starting' ? 'contacting your router…'
+					: aw.status === 'active' ? ''
+					: aw.error || 'unavailable';
+				awayStatus.classList.toggle('err', aw.status === 'blocked' || aw.status === 'failed');
+			}
+			if (qrSource === 'away' && !aw.qrDataUrl) qrSource = 'home';
+			homeRow.classList.toggle('active', qrSource === 'home');
+			awayRow.classList.toggle('active', qrSource === 'away');
+			qrImg.src = (qrSource === 'away' ? aw.qrDataUrl : info.qrDataUrl) || '';
 			urlCode.textContent = info.url || '';
 			linkCode.textContent = fmtCode(info.pairCode);
 		}
