@@ -225,16 +225,26 @@ class Downloader {
 		// paused run) still tick the counter, so a resumed chapter shows true progress
 		job.done = 0;
 		let nextIndex = 0;
+		// One page failing (after its retries) fails the whole job, so the other
+		// workers must stop claiming new pages — otherwise they keep downloading
+		// in the background against a job already shown as errored, overlapping
+		// with the next queued job or a user retry.
+		let failed = false;
 		const worker = async () => {
 			while (nextIndex < urls.length) {
-				if (this.cancelled.has(job.id) || this.paused) return;
+				if (failed || this.cancelled.has(job.id) || this.paused) return;
 				const i = nextIndex++;
 				const url = urls[i];
 				const ext = path.extname(new URL(url).pathname) || '.jpg';
 				const file = path.join(dir, String(i + 1).padStart(3, '0') + ext);
 				if (!fs.existsSync(file)) {
-					const buf = await client.fetchImage(url);
-					fs.writeFileSync(file, buf);
+					try {
+						const buf = await client.fetchImage(url);
+						fs.writeFileSync(file, buf);
+					} catch (err) {
+						failed = true;
+						throw err;
+					}
 				}
 				job.done++;
 				this.notifyProgress();

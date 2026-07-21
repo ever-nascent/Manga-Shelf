@@ -50,17 +50,25 @@ async function exportChapter(library, mangaId, chapterId, format, destFile) {
 	return destFile;
 }
 
-// Exports every downloaded chapter of a manga into destDir. Returns file count.
+// Exports every downloaded chapter of a manga into destDir. One bad chapter
+// (folder deleted by hand, unsupported image format) is skipped and reported,
+// never allowed to abort the rest of the run.
+// Returns { count, skipped: [{ label, error }] }.
 async function exportManga(library, mangaId, format, destDir) {
 	const manga = library.get(mangaId);
 	if (!manga) throw new Error('Manga not found in library.');
 	let count = 0;
+	const skipped = [];
 	for (const ch of manga.chapters) {
-		const dest = path.join(destDir, `${chapterLabel(manga.title, ch)}.${format}`);
-		await exportChapter(library, mangaId, ch.id, format, dest);
-		count++;
+		const label = chapterLabel(manga.title, ch);
+		try {
+			await exportChapter(library, mangaId, ch.id, format, path.join(destDir, `${label}.${format}`));
+			count++;
+		} catch (err) {
+			skipped.push({ label, error: err.message });
+		}
 	}
-	return count;
+	return { count, skipped };
 }
 
 module.exports = { exportChapter, exportManga, chapterLabel };

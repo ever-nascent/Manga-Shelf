@@ -170,7 +170,12 @@ async function renderManga(root, params, ctx, signal) {
 							btn.disabled = true;
 							try {
 								const res = await window.api.exportManga(m.id, 'cbz');
-								if (res) toast(`Exported ${res.count} chapters as CBZ.`, 'success');
+								if (res) {
+									toast(`Exported ${res.count} chapter${res.count === 1 ? '' : 's'} as CBZ.`, res.count ? 'success' : 'info');
+									if (res.skipped?.length) {
+										toast(`Skipped ${res.skipped.length}: ${res.skipped[0].label} (${res.skipped[0].error})`, 'error', 7000);
+									}
+								}
 							} catch (err) { toast(err.message, 'error'); }
 							btn.disabled = false;
 						}

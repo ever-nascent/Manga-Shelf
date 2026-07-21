@@ -64,6 +64,10 @@ export async function render(root, params, ctx) {
 			toast(result.added
 				? `Found ${result.added} new chapter${result.added === 1 ? '' : 's'}!`
 				: 'No new chapters since last check.', result.added ? 'success' : 'info');
+			if (result.failed?.length) {
+				const first = result.failed[0];
+				toast(`Couldn't check ${result.failed.length === 1 ? first.title : `${result.failed.length} series`} — ${first.error}`, 'error', 7000);
+			}
 		} catch (err) {
 			toast(`Update check failed: ${err.message}`, 'error');
 		} finally {

@@ -321,8 +321,8 @@ function registerIpc() {
 			properties: ['openDirectory', 'createDirectory']
 		});
 		if (canceled || !filePaths[0]) return null;
-		const count = await exporter.exportManga(library, mangaId, format, filePaths[0]);
-		return { dir: filePaths[0], count };
+		const { count, skipped } = await exporter.exportManga(library, mangaId, format, filePaths[0]);
+		return { dir: filePaths[0], count, skipped };
 	});
 
 	// ----- settings / misc -----

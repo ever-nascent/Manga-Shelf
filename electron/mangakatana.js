@@ -60,15 +60,49 @@ function parseUpdateDate(text) {
 	return Number.isNaN(d.getTime()) ? null : d.toISOString();
 }
 
+// A scrape that finds nothing is ambiguous: genuinely empty, a soft bot-block
+// (the site serves an empty page with HTTP 200), or a redesign that every
+// selector now misses. All three used to come back as [] — indistinguishable
+// from real "no results" — so these checks turn the last two into loud,
+// distinct errors instead.
+function layoutError(what, url) {
+	return new Error(`MangaKatana layout changed (${what} missing) — the scraper needs updating. ${url}`);
+}
+
+function assertRealPage($, url) {
+	if (!$('#header').length) {
+		throw new Error(`MangaKatana returned an empty or blocked page — try again shortly. ${url}`);
+	}
+}
+
 // ---------- search ----------
 
 async function searchManga(query) {
 	const url = `${BASE}/?search=${encodeURIComponent(query)}&search_by=book_name`;
 	const html = await htmlFetch(url);
 	const $ = cheerio.load(html);
-	const results = [];
 
-	$('#book_list .item, #single_list .item, .item[data-id]').each((_, el) => {
+	// a single exact match skips the result list: the site serves the book page
+	if ($('#single_book').length) {
+		const href = $('link[rel="canonical"]').attr('href') || $('meta[property="og:url"]').attr('content') || '';
+		const slugId = slugIdFromHref(href);
+		if (!slugId) throw layoutError('canonical book link', url);
+		return [{
+			id: `mk:${slugId}`,
+			title: $('#single_book h1.heading').first().text().trim(),
+			coverUrl: $('#single_book .cover img').first().attr('src') || null,
+			latestChapterLabel: null,
+			status: $('#single_book .value.status').first().text().trim() || null
+		}];
+	}
+
+	assertRealPage($, url);
+	// a genuine zero-result page still renders an (empty) #book_list
+	if (!$('#book_list, #single_list').length) throw layoutError('search result list', url);
+
+	const results = [];
+	const items = $('#book_list .item, #single_list .item, .item[data-id]');
+	items.each((_, el) => {
 		const $el = $(el);
 		const titleLink = $el.find('h3.title a').first();
 		const href = titleLink.attr('href');
@@ -90,6 +124,9 @@ async function searchManga(query) {
 		});
 	});
 
+	// items rendered but none parsed: their inner structure changed
+	if (items.length && !results.length) throw layoutError('search result entries', url);
+
 	// de-dupe (the page renders a couple of overlapping list markups)
 	const seen = new Set();
 	return results.filter((r) => (seen.has(r.id) ? false : seen.add(r.id)));
@@ -98,10 +135,15 @@ async function searchManga(query) {
 // ---------- manga details ----------
 
 async function getManga(mangaId) {
-	const html = await htmlFetch(mangaUrlFromId(mangaId));
+	const url = mangaUrlFromId(mangaId);
+	const html = await htmlFetch(url);
 	const $ = cheerio.load(html);
 
-	const title = $('#single_book h1.heading').first().text().trim() || 'Untitled';
+	assertRealPage($, url);
+	if (!$('#single_book').length) throw layoutError('#single_book', url);
+
+	const title = $('#single_book h1.heading').first().text().trim();
+	if (!title) throw layoutError('book title heading', url);
 	const coverUrl = $('#single_book .cover img').first().attr('src') || null;
 	const description = $('#single_book .summary p').first().text().trim();
 	const authors = $('#single_book .value.authors a').map((_, a) => $(a).text().trim()).get();
@@ -139,10 +181,15 @@ function parseChapterNumAndTitle(linkText) {
 }
 
 async function getChapters(mangaId) {
-	const html = await htmlFetch(mangaUrlFromId(mangaId));
+	const url = mangaUrlFromId(mangaId);
+	const html = await htmlFetch(url);
 	const $ = cheerio.load(html);
 	const slugId = slugFromMangaId(mangaId);
 	const chapters = [];
+
+	assertRealPage($, url);
+	if (!$('#single_book').length) throw layoutError('#single_book', url);
+	if (!$('.chapters table').length) throw layoutError('chapter table', url);
 
 	$('.chapters table tr').each((_, tr) => {
 		const $tr = $(tr);
@@ -166,6 +213,10 @@ async function getChapters(mangaId) {
 			group: 'MangaKatana'
 		});
 	});
+
+	// the table exists on every real series page; rows that all fail to parse
+	// mean the row markup changed, not an empty series
+	if (!chapters.length) throw layoutError('chapter rows', url);
 
 	return chapters.reverse(); // table lists newest first
 }

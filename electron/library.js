@@ -118,7 +118,9 @@ class Library {
 	}
 
 	chapterDir(manga, chapter) {
-		const label = chapter.num ? `Chapter ${padChapter(chapter.num)}` : 'Oneshot';
+		// chapter.num comes from an external source; sanitize so path separators
+		// or ".." in it can never walk the folder out of the library
+		const label = chapter.num ? sanitizeName(`Chapter ${padChapter(chapter.num)}`) : 'Oneshot';
 		return path.join(this.mangaDir(manga), label);
 	}
 

@@ -59,7 +59,7 @@ async function checkForUpdates(library) {
 	if (!follows.length) {
 		library.db.meta.lastUpdateCheckAt = new Date().toISOString();
 		library.saveDb();
-		return { added: 0, feed: library.getUpdatesFeed(), fresh: [] };
+		return { added: 0, feed: library.getUpdatesFeed(), fresh: [], failed: [] };
 	}
 
 	const mdFollows = follows.filter((f) => !mangakatana.isMkId(f.manga.id));
@@ -67,6 +67,7 @@ async function checkForUpdates(library) {
 
 	let added = 0;
 	const freshByManga = []; // for desktop notifications
+	const failed = []; // series we couldn't check, surfaced in the Updates view
 
 	// ----- MangaDex: batch the cheap "did anything change?" markers -----
 	// One malformed batch (or a MangaDex outage) must not sink the whole check,
@@ -79,6 +80,7 @@ async function checkForUpdates(library) {
 			for (const m of items) latestById.set(m.id, m.latestChapterId);
 		} catch (err) {
 			console.error('Update batch failed for a chunk of follows:', err.message);
+			failed.push({ title: `${chunk.length} MangaDex follows (batch check)`, error: err.message });
 		}
 	}
 
@@ -99,6 +101,7 @@ async function checkForUpdates(library) {
 			stored.lastCheckedChapterId = latest;
 		} catch (err) {
 			console.error(`Update check failed for ${f.manga.title}:`, err.message);
+			failed.push({ title: f.manga.title, error: err.message });
 		}
 	}
 
@@ -109,8 +112,9 @@ async function checkForUpdates(library) {
 		if (!stored) continue;
 
 		try {
+			// getChapters throws on a blocked page or layout change, so an empty
+			// list can't silently pass for "nothing new" anymore
 			const chapters = await mangakatana.getChapters(id);
-			if (!chapters.length) continue;
 			const latest = chapters[chapters.length - 1].id; // list is oldest -> newest
 			if (latest === stored.lastCheckedChapterId) continue;
 
@@ -120,12 +124,13 @@ async function checkForUpdates(library) {
 			stored.lastCheckedChapterId = latest;
 		} catch (err) {
 			console.error(`Update check failed for ${f.manga.title}:`, err.message);
+			failed.push({ title: f.manga.title, error: err.message });
 		}
 	}
 
 	library.db.meta.lastUpdateCheckAt = new Date().toISOString();
 	library.saveDb();
-	return { added, feed: library.getUpdatesFeed(), fresh: freshByManga };
+	return { added, feed: library.getUpdatesFeed(), fresh: freshByManga, failed };
 }
 
 module.exports = { checkForUpdates };
