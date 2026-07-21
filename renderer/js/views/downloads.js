@@ -5,20 +5,40 @@ import { icon } from '../icons.js';
 const STATUS_TEXT = {
 	queued: 'Queued',
 	downloading: 'Downloading',
+	paused: 'Paused',
 	done: 'Done',
 	error: 'Failed',
 	cancelled: 'Cancelled'
 };
 
+const ACTIVE = new Set(['queued', 'downloading', 'paused']);
+
 export async function render(root, params, ctx, signal) {
+	const pauseBtn = h('button', { class: 'btn small hidden' });
 	const retryAllBtn = h('button', { class: 'btn small hidden' }, icon('refresh', 14), 'Retry failed');
 	const clearBtn = h('button', { class: 'btn small' }, icon('trash', 14), 'Clear finished');
 	const summary = h('div', { class: 'dl-summary' });
 
 	root.append(
 		h('div', { class: 'view-title' }, 'Downloads'),
-		h('div', { class: 'dl-toolbar' }, summary, h('span', { class: 'head-spacer' }), retryAllBtn, clearBtn)
+		h('div', { class: 'dl-toolbar' }, summary, h('span', { class: 'head-spacer' }), pauseBtn, retryAllBtn, clearBtn)
 	);
+
+	let paused = await window.api.getDownloadsPaused();
+	if (signal?.aborted) return;
+
+	const renderPauseBtn = (queue) => {
+		pauseBtn.classList.toggle('hidden', !queue.some((j) => ACTIVE.has(j.status)));
+		clear(pauseBtn);
+		pauseBtn.append(icon(paused ? 'play' : 'pause', 14), paused ? 'Resume' : 'Pause');
+	};
+
+	pauseBtn.addEventListener('click', async () => {
+		pauseBtn.disabled = true;
+		paused = paused ? await window.api.resumeDownloads() : await window.api.pauseDownloads();
+		pauseBtn.disabled = false;
+		renderPauseBtn(lastQueue);
+	});
 
 	const list = h('div', { class: 'dl-list' });
 	const emptySlot = h('div', {});
@@ -60,7 +80,7 @@ export async function render(root, params, ctx, signal) {
 			row.el.className = `dl-item st-${job.status}`;
 			row.status.textContent = STATUS_TEXT[job.status] || job.status;
 			clear(row.actions);
-			if (job.status === 'queued' || job.status === 'downloading') {
+			if (ACTIVE.has(job.status)) {
 				row.actions.append(h('button', {
 					class: 'btn small icon-only', title: 'Cancel',
 					onclick: () => window.api.cancelDownload(job.id)
@@ -74,7 +94,10 @@ export async function render(root, params, ctx, signal) {
 		}
 	}
 
+	let lastQueue = [];
+
 	function draw(queue) {
+		lastQueue = queue;
 		const ids = new Set(queue.map((j) => j.id));
 		for (const [id, row] of rows) {
 			if (!ids.has(id)) { row.el.remove(); rows.delete(id); }
@@ -90,15 +113,17 @@ export async function render(root, params, ctx, signal) {
 		}
 
 		const active = queue.filter((j) => j.status === 'downloading').length;
-		const queued = queue.filter((j) => j.status === 'queued').length;
+		const queued = queue.filter((j) => j.status === 'queued' || j.status === 'paused').length;
 		const failed = queue.filter((j) => j.status === 'error').length;
 		const done = queue.filter((j) => j.status === 'done').length;
 		const parts = [];
-		if (active) parts.push(`${active} downloading`);
+		if (paused && (active || queued)) parts.push('Paused');
+		else if (active) parts.push(`${active} downloading`);
 		if (queued) parts.push(`${queued} queued`);
 		if (done) parts.push(`${done} done`);
 		if (failed) parts.push(`${failed} failed`);
 		summary.textContent = parts.join(' · ');
+		renderPauseBtn(queue);
 		retryAllBtn.classList.toggle('hidden', failed === 0);
 
 		clear(emptySlot);

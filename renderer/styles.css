@@ -389,6 +389,11 @@ select option { background: var(--panel); }
 .chapter-table .ch-group, .chapter-table .ch-date { color: var(--muted); font-size: 12.5px; white-space: nowrap; }
 .chapter-table .ch-actions { text-align: right; white-space: nowrap; }
 .chapter-table .done-mark { color: var(--green); margin-right: 8px; display: inline-flex; vertical-align: middle; }
+.chapter-table .ch-check { width: 30px; padding-right: 0; }
+.chapter-table .ch-check input, .bulk-all input { accent-color: var(--accent); width: 15px; height: 15px; cursor: pointer; }
+
+.bulk-bar { display: flex; align-items: center; gap: 12px; margin-bottom: 10px; }
+.bulk-all { display: flex; align-items: center; gap: 7px; font-size: 13px; color: var(--muted); cursor: pointer; user-select: none; }
 
 .section-sub { font-size: 18px; font-weight: 700; margin: 30px 0 14px; }
 .chapters-head { display: flex; align-items: center; gap: 12px; }
@@ -622,10 +627,12 @@ select option { background: var(--panel); }
 .dl-item.st-done .dl-bar div { background: var(--green); }
 .dl-item.st-error .dl-bar div { background: var(--red); }
 .dl-item.st-cancelled .dl-bar div { background: var(--muted); }
+.dl-item.st-paused .dl-bar div { background: var(--gold); transition: none; }
 .dl-status { font-size: 12.5px; font-weight: 700; text-align: center; }
 .dl-actions { display: flex; justify-content: flex-end; min-height: 28px; }
 .st-queued .dl-status { color: var(--muted); }
 .st-downloading .dl-status { color: var(--accent); }
+.st-paused .dl-status { color: var(--gold); }
 .st-done .dl-status { color: var(--green); }
 .st-error .dl-status { color: var(--red); }
 .st-cancelled .dl-status { color: var(--muted); }
@@ -653,6 +660,17 @@ select option { background: var(--panel); }
 }
 .check-row { display: flex; align-items: center; gap: 8px; padding: 5px 0; cursor: pointer; }
 .check-row input { accent-color: var(--accent); width: 15px; height: 15px; }
+
+/* storage usage */
+.storage-total { font-size: 14px; margin-bottom: 14px; }
+.storage-total b { font-size: 15px; }
+.storage-list { display: flex; flex-direction: column; gap: 12px; }
+.storage-row { display: grid; grid-template-columns: 1fr 120px auto; align-items: center; gap: 12px; }
+.storage-meta { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.storage-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; }
+.storage-size { color: var(--muted); font-size: 12px; }
+.storage-bar { height: 7px; background: var(--border); border-radius: 4px; overflow: hidden; }
+.storage-bar div { height: 100%; background: var(--accent); border-radius: 4px; }
 
 /* phone remote pairing */
 .remote-panel { display: flex; gap: 18px; align-items: flex-start; margin-top: 14px; }

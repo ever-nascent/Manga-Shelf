@@ -47,6 +47,15 @@ export function fmtNum(n) {
 	return String(n);
 }
 
+export function fmtBytes(n) {
+	if (!n) return '0 MB';
+	const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+	let v = n;
+	let i = 0;
+	while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
+	return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
+}
+
 export function fmtDate(iso) {
 	if (!iso) return '';
 	return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });

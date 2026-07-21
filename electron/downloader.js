@@ -18,6 +18,7 @@ class Downloader {
 		this.onUpdate = onUpdate;
 		this.queue = [];
 		this.running = false;
+		this.paused = false;
 		this.cancelled = new Set();
 		this.counter = 0;
 		this.lastNotifyAt = 0;
@@ -53,7 +54,7 @@ class Downloader {
 
 	// manga: normalized manga object; chapters: normalized chapter objects
 	add(manga, chapters) {
-		const queued = new Set(this.queue.filter((j) => j.status === 'queued' || j.status === 'downloading').map((j) => j.chapter.id));
+		const queued = new Set(this.queue.filter((j) => this.isPending(j)).map((j) => j.chapter.id));
 		for (const chapter of chapters) {
 			if (chapter.external) continue;
 			if (queued.has(chapter.id)) continue;
@@ -75,12 +76,45 @@ class Downloader {
 	cancel(jobId) {
 		const job = this.queue.find((j) => j.id === jobId);
 		if (!job) return;
-		if (job.status === 'queued') {
-			job.status = 'cancelled';
-		} else if (job.status === 'downloading') {
+		if (job.status === 'downloading') {
 			this.cancelled.add(jobId);
+		} else if (job.status === 'queued' || job.status === 'paused') {
+			// a job halted mid-chapter has partial pages on disk — clear them
+			if (job.status === 'paused') {
+				try { fs.rmSync(this.library.chapterDir(job.manga, job.chapter), { recursive: true, force: true }); } catch { /* ignore */ }
+			}
+			job.status = 'cancelled';
 		}
 		this.notify();
+	}
+
+	// unfinished work: waiting, actively downloading, or halted mid-chapter
+	isPending(job) {
+		return job.status === 'queued' || job.status === 'downloading' || job.status === 'paused';
+	}
+
+	isPaused() {
+		return this.paused;
+	}
+
+	// Stop the queue. The in-flight chapter's page workers see this and stop
+	// fetching; its already-saved pages stay on disk and are skipped on resume,
+	// so nothing downloaded so far is wasted.
+	pause() {
+		if (this.paused) return true;
+		this.paused = true;
+		this.notify();
+		return true;
+	}
+
+	resume() {
+		if (!this.paused) return false;
+		this.paused = false;
+		// the chapter we halted goes back in line; its saved pages are reused
+		for (const j of this.queue) if (j.status === 'paused') j.status = 'queued';
+		this.notify();
+		this.run();
+		return false;
 	}
 
 	// re-queue a failed or cancelled job (already-saved pages are skipped)
@@ -95,12 +129,12 @@ class Downloader {
 	}
 
 	clearFinished() {
-		this.queue = this.queue.filter((j) => j.status === 'queued' || j.status === 'downloading');
+		this.queue = this.queue.filter((j) => this.isPending(j));
 		this.notify();
 	}
 
 	hasActiveJobs() {
-		return this.queue.some((j) => j.status === 'queued' || j.status === 'downloading');
+		return this.queue.some((j) => this.isPending(j));
 	}
 
 	// Unfinished work, with the full manga/chapter objects a restore needs. The
@@ -108,7 +142,7 @@ class Downloader {
 	// disk and get skipped, so restarting it costs nothing.
 	pendingJobs() {
 		return this.queue
-			.filter((j) => j.status === 'queued' || j.status === 'downloading')
+			.filter((j) => this.isPending(j))
 			.map((j) => ({ manga: j.manga, chapter: j.chapter }));
 	}
 
@@ -139,12 +173,14 @@ class Downloader {
 		this.running = true;
 		try {
 			let job;
-			while ((job = this.queue.find((j) => j.status === 'queued'))) {
+			while (!this.paused && (job = this.queue.find((j) => j.status === 'queued'))) {
 				job.status = 'downloading';
 				this.notify();
 				try {
 					await this.downloadChapter(job);
-					job.status = this.cancelled.has(job.id) ? 'cancelled' : 'done';
+					if (this.cancelled.has(job.id)) job.status = 'cancelled';
+					else if (this.paused) job.status = 'paused'; // halted mid-chapter; resume finishes it
+					else job.status = 'done';
 				} catch (err) {
 					console.error('Download failed:', err);
 					job.status = 'error';
@@ -185,10 +221,13 @@ class Downloader {
 		const dir = this.library.chapterDir(manga, chapter);
 		fs.mkdirSync(dir, { recursive: true });
 
+		// recount from zero each attempt: pages already on disk (from a previous
+		// paused run) still tick the counter, so a resumed chapter shows true progress
+		job.done = 0;
 		let nextIndex = 0;
 		const worker = async () => {
 			while (nextIndex < urls.length) {
-				if (this.cancelled.has(job.id)) return;
+				if (this.cancelled.has(job.id) || this.paused) return;
 				const i = nextIndex++;
 				const url = urls[i];
 				const ext = path.extname(new URL(url).pathname) || '.jpg';
@@ -207,6 +246,8 @@ class Downloader {
 			fs.rmSync(dir, { recursive: true, force: true });
 			return;
 		}
+		// paused part-way: keep the pages we have; the resumed run reuses them
+		if (this.paused) return;
 		this.library.addChapter(manga.id, chapter, dir, urls.length);
 	}
 }

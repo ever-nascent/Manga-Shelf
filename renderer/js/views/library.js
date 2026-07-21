@@ -201,48 +201,111 @@ async function renderManga(root, params, ctx, signal) {
 	};
 
 	root.append(h('div', { class: 'section-sub' }, 'Downloaded chapters'));
+
+	// ---------- bulk selection / deletion ----------
+	const selected = new Set();
+	const rowChecks = new Map();
+
+	// "read" = chapters numbered before wherever you're currently reading
+	const currentNum = m.progress ? parseFloat(m.progress.chapterNum) : NaN;
+	const readChapters = Number.isNaN(currentNum) ? [] : m.chapters.filter((c) => {
+		const n = parseFloat(c.num);
+		return !Number.isNaN(n) && n < currentNum;
+	});
+
+	const selectAll = h('input', { type: 'checkbox', title: 'Select all' });
+	const delSelBtn = h('button', { class: 'btn small danger' });
+	const delReadBtn = h('button', { class: 'btn small' }, icon('check', 14),
+		`Delete read (${readChapters.length})`);
+
+	const refreshBulk = () => {
+		clear(delSelBtn);
+		delSelBtn.append(icon('trash', 14), `Delete selected${selected.size ? ` (${selected.size})` : ''}`);
+		delSelBtn.disabled = selected.size === 0;
+		selectAll.checked = selected.size > 0 && selected.size === m.chapters.length;
+		selectAll.indeterminate = selected.size > 0 && selected.size < m.chapters.length;
+	};
+
+	const deleteMany = async (ids, label) => {
+		if (!ids.length) return;
+		if (!confirm(`Delete ${ids.length} ${label} from disk? This can't be undone.`)) return;
+		await window.api.removeChapters(m.id, ids);
+		toast(`Deleted ${ids.length} chapter${ids.length === 1 ? '' : 's'}.`);
+		rerender();
+	};
+
+	selectAll.addEventListener('change', () => {
+		selected.clear();
+		if (selectAll.checked) for (const c of m.chapters) selected.add(c.id);
+		for (const [id, cb] of rowChecks) cb.checked = selected.has(id);
+		refreshBulk();
+	});
+	delSelBtn.addEventListener('click', () =>
+		deleteMany([...selected], selected.size === 1 ? 'chapter' : 'chapters'));
+	delReadBtn.addEventListener('click', () =>
+		deleteMany(readChapters.map((c) => c.id),
+			readChapters.length === 1 ? 'read chapter' : 'read chapters'));
+
+	root.append(h('div', { class: 'bulk-bar' },
+		h('label', { class: 'bulk-all' }, selectAll, 'Select all'),
+		delSelBtn,
+		readChapters.length ? delReadBtn : null
+	));
+
 	root.append(
 		h('table', { class: 'chapter-table' },
-			m.chapters.map((ch) => h('tr', {},
-				h('td', { class: 'ch-num' }, ch.num ? `Ch. ${ch.num}` : 'Oneshot'),
-				h('td', { class: 'ch-title' }, ch.title || ''),
-				h('td', { class: 'ch-group' }, `${ch.pages} pages`),
-				h('td', { class: 'ch-date' }, fmtDate(ch.downloadedAt)),
-				h('td', { class: 'ch-actions' },
-					h('button', {
-						class: 'btn small',
-						onclick: () => ctx.openReader(m, readingList, readingList.findIndex((c) => c.id === ch.id), 0)
-					}, 'Read'), ' ',
-					h('button', {
-						class: 'btn small', title: 'Export as CBZ',
-						onclick: async () => {
-							try {
-								const f = await window.api.exportChapter(m.id, ch.id, 'cbz');
-								if (f) toast('Exported CBZ.', 'success');
-							} catch (err) { toast(err.message, 'error'); }
-						}
-					}, 'CBZ'), ' ',
-					h('button', {
-						class: 'btn small', title: 'Export as PDF',
-						onclick: async () => {
-							try {
-								const f = await window.api.exportChapter(m.id, ch.id, 'pdf');
-								if (f) toast('Exported PDF.', 'success');
-							} catch (err) { toast(err.message, 'error'); }
-						}
-					}, 'PDF'), ' ',
-					h('button', {
-						class: 'btn small danger icon-only', title: 'Delete chapter',
-						onclick: async () => {
-							if (!confirm(`Delete ${chapterName(ch)} from disk?`)) return;
-							await window.api.removeChapter(m.id, ch.id);
-							rerender();
-						}
-					}, icon('trash', 14))
-				)
-			))
+			m.chapters.map((ch) => {
+				const cb = h('input', {
+					type: 'checkbox',
+					onchange: () => {
+						cb.checked ? selected.add(ch.id) : selected.delete(ch.id);
+						refreshBulk();
+					}
+				});
+				rowChecks.set(ch.id, cb);
+				return h('tr', {},
+					h('td', { class: 'ch-check' }, cb),
+					h('td', { class: 'ch-num' }, ch.num ? `Ch. ${ch.num}` : 'Oneshot'),
+					h('td', { class: 'ch-title' }, ch.title || ''),
+					h('td', { class: 'ch-group' }, `${ch.pages} pages`),
+					h('td', { class: 'ch-date' }, fmtDate(ch.downloadedAt)),
+					h('td', { class: 'ch-actions' },
+						h('button', {
+							class: 'btn small',
+							onclick: () => ctx.openReader(m, readingList, readingList.findIndex((c) => c.id === ch.id), 0)
+						}, 'Read'), ' ',
+						h('button', {
+							class: 'btn small', title: 'Export as CBZ',
+							onclick: async () => {
+								try {
+									const f = await window.api.exportChapter(m.id, ch.id, 'cbz');
+									if (f) toast('Exported CBZ.', 'success');
+								} catch (err) { toast(err.message, 'error'); }
+							}
+						}, 'CBZ'), ' ',
+						h('button', {
+							class: 'btn small', title: 'Export as PDF',
+							onclick: async () => {
+								try {
+									const f = await window.api.exportChapter(m.id, ch.id, 'pdf');
+									if (f) toast('Exported PDF.', 'success');
+								} catch (err) { toast(err.message, 'error'); }
+							}
+						}, 'PDF'), ' ',
+						h('button', {
+							class: 'btn small danger icon-only', title: 'Delete chapter',
+							onclick: async () => {
+								if (!confirm(`Delete ${chapterName(ch)} from disk?`)) return;
+								await window.api.removeChapter(m.id, ch.id);
+								rerender();
+							}
+						}, icon('trash', 14))
+					)
+				);
+			})
 		)
 	);
+	refreshBulk();
 
 	// progress may have changed while reading
 	window.addEventListener('reader-closed', () => {

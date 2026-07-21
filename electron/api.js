@@ -14,6 +14,7 @@ const MIN = 60_000;
 // tell the other side (desktop or phone) that it should refresh
 const MUTATES = {
 	'lib:removeChapter': 'library',
+	'lib:removeChapters': 'library',
 	'lib:removeManga': 'library',
 	'reading:set': 'reading',
 	'reading:remove': 'reading',
@@ -69,13 +70,18 @@ function createApi({ library, downloader, cache, onChange }) {
 		'dl:retry': (jobId) => downloader.retry(jobId),
 		'dl:queue': () => downloader.snapshot(),
 		'dl:clearFinished': () => downloader.clearFinished(),
+		'dl:pause': () => downloader.pause(),
+		'dl:resume': () => downloader.resume(),
+		'dl:paused': () => downloader.isPaused(),
 
 		// ----- library -----
 		'lib:all': () => library.getAll(),
 		'lib:get': (id) => library.get(id),
 		'lib:pages': (mangaId, chapterId) => library.getChapterPages(mangaId, chapterId),
 		'lib:removeChapter': (mangaId, chapterId) => library.removeChapter(mangaId, chapterId),
+		'lib:removeChapters': (mangaId, chapterIds) => library.removeChapters(mangaId, chapterIds),
 		'lib:removeManga': (mangaId) => library.removeManga(mangaId),
+		'lib:storage': () => library.storageUsage(),
 
 		// ----- reading progress (any manga) -----
 		'reading:set': (mangaSnap, progress) => library.setReading(mangaSnap, progress),

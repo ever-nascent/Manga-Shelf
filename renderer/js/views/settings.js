@@ -1,5 +1,6 @@
-import { h, toast } from '../util.js';
+import { h, clear, toast, fmtBytes } from '../util.js';
 import { styledSelect } from '../components.js';
+import { icon } from '../icons.js';
 
 const LANGUAGES = [
 	['en', 'English'], ['es', 'Spanish'], ['es-la', 'Spanish (LATAM)'], ['fr', 'French'],
@@ -157,6 +158,58 @@ export async function render(root, params, ctx, signal) {
 		remotePanel
 	));
 	window.api.getRemoteInfo().then((info) => { if (!signal.aborted) applyRemote(info); });
+
+	// ----- storage -----
+	const storageBody = h('div', { class: 'storage-body' });
+	root.append(h('div', { class: 'settings-block' },
+		h('h3', {}, 'Storage'),
+		h('div', { class: 'hint' }, 'How much disk space each downloaded series is using. Delete a series to free space.'),
+		storageBody
+	));
+
+	async function loadStorage() {
+		clear(storageBody);
+		storageBody.append(h('div', { class: 'hint' }, 'Calculating…'));
+		let usage;
+		try {
+			usage = await window.api.getStorageUsage();
+		} catch (err) {
+			clear(storageBody);
+			storageBody.append(h('div', { class: 'hint' }, `Couldn't read storage: ${err.message}`));
+			return;
+		}
+		if (signal.aborted) return;
+		clear(storageBody);
+		storageBody.append(h('div', { class: 'storage-total' },
+			h('b', {}, fmtBytes(usage.total)),
+			` across ${usage.items.length} series`));
+		if (!usage.items.length) {
+			storageBody.append(h('div', { class: 'hint' }, 'No downloads yet.'));
+			return;
+		}
+		const max = usage.items[0].bytes || 1;
+		const list = h('div', { class: 'storage-list' });
+		for (const it of usage.items) {
+			list.append(h('div', { class: 'storage-row' },
+				h('div', { class: 'storage-meta' },
+					h('span', { class: 'storage-name', title: it.title }, it.title),
+					h('span', { class: 'storage-size' }, `${fmtBytes(it.bytes)} · ${it.chapters} ch.`)
+				),
+				h('div', { class: 'storage-bar' }, h('div', { style: { width: `${(it.bytes / max) * 100}%` } })),
+				h('button', {
+					class: 'btn small danger icon-only', title: 'Delete series from disk',
+					onclick: async () => {
+						if (!confirm(`Delete "${it.title}" and all ${it.chapters} downloaded chapters from disk?`)) return;
+						await window.api.removeManga(it.id);
+						toast(`Deleted ${it.title}.`);
+						loadStorage();
+					}
+				}, icon('trash', 14))
+			));
+		}
+		storageBody.append(list);
+	}
+	loadStorage();
 
 	// ----- about / updates -----
 	const version = await window.api.getAppVersion();

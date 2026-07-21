@@ -26,6 +26,9 @@ contextBridge.exposeInMainWorld('api', {
 	retryDownload: invoke('dl:retry'),
 	getQueue: invoke('dl:queue'),
 	clearFinishedDownloads: invoke('dl:clearFinished'),
+	pauseDownloads: invoke('dl:pause'),
+	resumeDownloads: invoke('dl:resume'),
+	getDownloadsPaused: invoke('dl:paused'),
 	onDownloadsResumed: (cb) => ipcRenderer.on('dl:resumed', (_e, n) => cb(n)),
 
 	// quit prompt: main asks, the renderer answers 'pause' | 'cancel' | 'stay'
@@ -44,7 +47,9 @@ contextBridge.exposeInMainWorld('api', {
 	getLibraryManga: invoke('lib:get'),
 	getChapterPages: invoke('lib:pages'),
 	removeChapter: invoke('lib:removeChapter'),
+	removeChapters: invoke('lib:removeChapters'),
 	removeManga: invoke('lib:removeManga'),
+	getStorageUsage: invoke('lib:storage'),
 
 	// reading progress
 	setReading: invoke('reading:set'),

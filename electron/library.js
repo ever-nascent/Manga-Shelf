@@ -11,6 +11,25 @@ function sanitizeName(name) {
 	return name.replace(/[<>:"/\\|?*\x00-\x1f]/g, '').replace(/\.+$/, '').trim().slice(0, 120) || 'Untitled';
 }
 
+// Sum the byte size of every file under a directory, ignoring anything that
+// can't be read (a file removed mid-walk, a permission error).
+function dirSize(dir) {
+	let total = 0;
+	let entries;
+	try {
+		entries = fs.readdirSync(dir, { withFileTypes: true });
+	} catch {
+		return 0;
+	}
+	for (const e of entries) {
+		const p = path.join(dir, e.name);
+		try {
+			total += e.isDirectory() ? dirSize(p) : fs.statSync(p).size;
+		} catch { /* ignore unreadable entries */ }
+	}
+	return total;
+}
+
 function padChapter(num) {
 	if (num === null || num === undefined || num === '') return 'Oneshot';
 	const s = String(num);
@@ -328,6 +347,33 @@ class Library {
 		fs.rmSync(ch.path, { recursive: true, force: true });
 		delete m.chapters[chapterId];
 		this.saveDb();
+	}
+
+	// Delete several chapters at once, writing the db a single time.
+	removeChapters(mangaId, chapterIds) {
+		const m = this.db.manga[mangaId];
+		if (!m) return 0;
+		let removed = 0;
+		for (const chapterId of chapterIds || []) {
+			const ch = m.chapters[chapterId];
+			if (!ch) continue;
+			fs.rmSync(ch.path, { recursive: true, force: true });
+			delete m.chapters[chapterId];
+			removed++;
+		}
+		if (removed) this.saveDb();
+		return removed;
+	}
+
+	// Disk usage per downloaded series (bytes), largest first, with the total.
+	storageUsage() {
+		const items = Object.values(this.db.manga).map((m) => ({
+			id: m.id,
+			title: m.title,
+			chapters: Object.keys(m.chapters).length,
+			bytes: fs.existsSync(m.path) ? dirSize(m.path) : 0
+		})).sort((a, b) => b.bytes - a.bytes);
+		return { items, total: items.reduce((sum, it) => sum + it.bytes, 0) };
 	}
 
 	removeManga(mangaId) {
