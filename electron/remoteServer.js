@@ -16,7 +16,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { USER_AGENT } = require('./util');
+const { USER_AGENT, fetchWithTimeout, describeFetchError, IMAGE_TIMEOUT_MS } = require('./util');
 const { makePostMap } = require('./api');
 
 const DEFAULT_PORT = 8420;
@@ -98,13 +98,19 @@ class RemoteServer {
 				});
 			});
 			let tries = 0;
+			// Both listeners must come off on every outcome. Passing the success
+			// callback to listen() instead registers a 'listening' handler that a
+			// failed attempt leaves behind, so the next port's success fires the
+			// stale one too: start() resolved the port we didn't get, and each
+			// retry started a heartbeat that stop() could no longer clear.
 			const tryListen = (port) => {
-				server.once('error', (err) => {
+				const onError = (err) => {
+					server.removeListener('listening', onListening);
 					if (err.code === 'EADDRINUSE' && ++tries < PORT_TRIES) tryListen(port + 1);
 					else { this.server = null; reject(err); }
-				});
-				server.listen(port, '0.0.0.0', () => {
-					server.removeAllListeners('error');
+				};
+				const onListening = () => {
+					server.removeListener('error', onError);
 					this.port = port;
 					this.server = server;
 					// SSE connections idle for long stretches; a periodic comment
@@ -113,7 +119,10 @@ class RemoteServer {
 						for (const client of this.sseClients) client.write(':hb\n\n');
 					}, 25_000);
 					resolve(port);
-				});
+				};
+				server.once('error', onError);
+				server.once('listening', onListening);
+				server.listen(port, '0.0.0.0');
 			};
 			tryListen(DEFAULT_PORT);
 		});
@@ -251,7 +260,13 @@ class RemoteServer {
 		if (target.protocol !== 'https:' || !PROXY_HOSTS.test(target.hostname)) {
 			return this.json(res, 403, { ok: false, error: 'Host not allowed' });
 		}
-		const upstream = await fetch(target, { headers: { 'User-Agent': USER_AGENT } });
+		let upstream;
+		try {
+			upstream = await fetchWithTimeout(target, { headers: { 'User-Agent': USER_AGENT } }, IMAGE_TIMEOUT_MS);
+		} catch (err) {
+			// without this the phone's <img> just spins forever on a dead CDN
+			return this.json(res, 504, { ok: false, error: `Upstream ${describeFetchError(err)}` });
+		}
 		if (!upstream.ok) return this.json(res, 502, { ok: false, error: `Upstream ${upstream.status}` });
 		const buf = Buffer.from(await upstream.arrayBuffer());
 		res.writeHead(200, {

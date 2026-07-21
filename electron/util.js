@@ -18,16 +18,36 @@ function makeRateLimiter(gapMs) {
 	};
 }
 
+// Node's fetch has no default timeout, so a socket that opens and then goes
+// quiet hangs forever. That is worst in the downloader, which works through
+// chapters strictly serially: one wedged request stalls the entire queue with
+// no error and no retry. Every outbound request goes through here.
+const API_TIMEOUT_MS = 15_000;
+const IMAGE_TIMEOUT_MS = 45_000; // pages are megabytes; allow a slow-but-alive transfer
+
+function fetchWithTimeout(url, options = {}, ms = API_TIMEOUT_MS) {
+	return fetch(url, { ...options, signal: AbortSignal.timeout(ms) });
+}
+
+// AbortSignal.timeout covers the body read too, not just the headers, so a
+// transfer that stalls halfway also lands here rather than hanging.
+function describeFetchError(err) {
+	return err.name === 'TimeoutError' ? 'timed out' : err.message;
+}
+
 async function fetchImage(url, attempt = 1) {
-	const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
-	if (!res.ok) {
+	try {
+		const res = await fetchWithTimeout(url, { headers: { 'User-Agent': USER_AGENT } }, IMAGE_TIMEOUT_MS);
+		if (!res.ok) throw new Error(`HTTP ${res.status}`);
+		return Buffer.from(await res.arrayBuffer());
+	} catch (err) {
+		// a timeout is as worth retrying as a bad status, and used not to be
 		if (attempt <= 3) {
 			await sleep(1000 * attempt);
 			return fetchImage(url, attempt + 1);
 		}
-		throw new Error(`Image download failed (${res.status}): ${url}`);
+		throw new Error(`Image download failed (${describeFetchError(err)}): ${url}`);
 	}
-	return Buffer.from(await res.arrayBuffer());
 }
 
 // Write via temp file + rename so a crash mid-write can't leave a truncated
@@ -38,4 +58,7 @@ function writeFileAtomic(file, data) {
 	fs.renameSync(tmp, file);
 }
 
-module.exports = { USER_AGENT, sleep, makeRateLimiter, fetchImage, writeFileAtomic };
+module.exports = {
+	USER_AGENT, sleep, makeRateLimiter, fetchImage, writeFileAtomic,
+	fetchWithTimeout, describeFetchError, API_TIMEOUT_MS, IMAGE_TIMEOUT_MS
+};

@@ -34,7 +34,7 @@ export async function render(root, params, ctx, signal) {
 					}
 				}
 			}, 'Change'),
-			h('button', { class: 'btn small', onclick: () => window.api.openPath(settings.libraryPath) }, 'Open')
+			h('button', { class: 'btn small', onclick: () => window.api.openLibraryFolder() }, 'Open')
 		)
 	));
 

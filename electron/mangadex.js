@@ -1,7 +1,7 @@
 // MangaDex API client. Docs: https://api.mangadex.org/docs/
 // MangaDex asks for a descriptive User-Agent and <5 requests/sec.
 
-const { USER_AGENT, sleep, makeRateLimiter, fetchImage } = require('./util');
+const { USER_AGENT, sleep, makeRateLimiter, fetchImage, fetchWithTimeout, describeFetchError } = require('./util');
 
 const API_BASE = 'https://api.mangadex.org';
 const COVER_BASE = 'https://uploads.mangadex.org/covers';
@@ -24,7 +24,12 @@ function buildUrl(path, params = {}) {
 async function apiFetch(path, params, attempt = 1) {
 	await rateLimit();
 	const url = buildUrl(path, params);
-	const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+	let res;
+	try {
+		res = await fetchWithTimeout(url, { headers: { 'User-Agent': USER_AGENT } });
+	} catch (err) {
+		throw new Error(`MangaDex request ${describeFetchError(err)} on ${path}`);
+	}
 
 	if (res.status === 429 && attempt <= 3) {
 		const retryAfter = Number(res.headers.get('retry-after')) || 2;

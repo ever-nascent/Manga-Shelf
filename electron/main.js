@@ -354,7 +354,10 @@ function registerIpc() {
 		appUpdater.quitAndInstall({ relaunch: true });
 		return true;
 	}));
-	ipcMain.handle('shell:openPath', wrap((p) => shell.openPath(p)));
+	// Takes no path on purpose. shell.openPath launches whatever it is handed,
+	// executables included, so the renderer doesn't get to name the target: the
+	// only folder it ever asked for was the configured library.
+	ipcMain.handle('shell:openLibraryFolder', wrap(() => shell.openPath(library.getSettings().libraryPath)));
 	ipcMain.handle('shell:openExternal', wrap((url) => {
 		if (/^https:\/\//.test(url)) shell.openExternal(url);
 	}));

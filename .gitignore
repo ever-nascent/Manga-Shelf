@@ -2,3 +2,8 @@ node_modules
 panels
 checkpoints
 dist
+
+# Electron user-data dirs from test runs. "undefined" is what lands here when a
+# --user-data-dir placeholder fails to expand.
+undefined/
+udata*/

@@ -8,7 +8,7 @@
 // Both map straight back to a URL under BASE.
 
 const cheerio = require('cheerio');
-const { USER_AGENT, sleep, makeRateLimiter, fetchImage } = require('./util');
+const { USER_AGENT, sleep, makeRateLimiter, fetchImage, fetchWithTimeout, describeFetchError } = require('./util');
 
 const BASE = 'https://mangakatana.com';
 
@@ -16,7 +16,12 @@ const rateLimit = makeRateLimiter(400);
 
 async function htmlFetch(url, attempt = 1) {
 	await rateLimit();
-	const res = await fetch(url, { headers: { 'User-Agent': USER_AGENT } });
+	let res;
+	try {
+		res = await fetchWithTimeout(url, { headers: { 'User-Agent': USER_AGENT } });
+	} catch (err) {
+		throw new Error(`MangaKatana request ${describeFetchError(err)}: ${url}`);
+	}
 	if (!res.ok) {
 		if (res.status === 429 && attempt <= 3) {
 			await sleep(1500 * attempt);

@@ -100,7 +100,7 @@ contextBridge.exposeInMainWorld('api', {
 	getSettings: invoke('settings:get'),
 	setSettings: invoke('settings:set'),
 	chooseLibraryFolder: invoke('settings:chooseFolder'),
-	openPath: invoke('shell:openPath'),
+	openLibraryFolder: invoke('shell:openLibraryFolder'),
 	openExternal: invoke('shell:openExternal'),
 	openMangaFolder: invoke('shell:openMangaFolder')
 });
