@@ -20,7 +20,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { USER_AGENT, fetchWithTimeout, describeFetchError, IMAGE_TIMEOUT_MS } = require('./util');
+const { USER_AGENT, fetchWithTimeout, describeFetchError, IMAGE_TIMEOUT_MS, isLanAddress } = require('./util');
 const { makePostMap } = require('./api');
 
 const DEFAULT_PORT = 8420;
@@ -222,6 +222,14 @@ class RemoteServer {
 	async handlePair(req, res) {
 		if (req.method !== 'POST') return this.json(res, 405, { ok: false, error: 'POST only' });
 		const addr = req.socket.remoteAddress || 'unknown';
+		// The first link must happen on the same network: a phone on the LAN
+		// reaches us at a private address, while anything coming in over the
+		// internet-forwarded port is public and refused here. This is checked
+		// before the failure counters, so an internet client cannot even reach
+		// the pairing logic, let alone spend guesses or trip the lockout.
+		if (!isLanAddress(addr)) {
+			return this.json(res, 403, { ok: false, error: 'not-local' });
+		}
 		if (this.pairingLocked(addr)) {
 			return this.json(res, 429, { ok: false, error: 'locked' });
 		}

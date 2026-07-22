@@ -148,6 +148,7 @@ window.addEventListener('remote-unauthorized', () => {
 function pairErrorText(err) {
 	if (err.message === 'bad-code') return 'That code didn’t match or has expired. Check Settings on your PC for the current one.';
 	if (err.message === 'locked') return 'Too many attempts. Wait a few minutes, then try the current code.';
+	if (err.message === 'not-local') return 'Link this phone while it’s on the same Wi-Fi as your PC. Once linked, you can use it from anywhere.';
 	return err.message;
 }
 
