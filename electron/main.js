@@ -299,10 +299,9 @@ async function remoteInfo() {
 		}
 	};
 	if (running && info.pairCode) {
-		// One QR, always the home address: pairing is LAN-only (a request to the
-		// internet address loops through the router and no longer looks local),
-		// and away access is handed to the internet origin automatically after
-		// linking (mobile app.js), so no separate away QR is needed.
+		// One QR, always the home address. The away page pairs the same way but by
+		// typing the code (no camera-friendly QR for it), so no separate away QR
+		// is needed.
 		const QRCode = require('qrcode');
 		const qrOpts = { margin: 1, width: 480, color: { dark: '#0e1015ff', light: '#ffffffff' } };
 		info.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${info.pairCode}`, qrOpts);
