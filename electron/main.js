@@ -295,21 +295,17 @@ async function remoteInfo() {
 			// enabled means an attempt is coming
 			status: !anywhereOn ? 'off' : (!upnp || upnp.status() === 'off' ? 'starting' : upnp.status()),
 			url: anywhereOn ? upnp?.url() || null : null,
-			error: anywhereOn ? upnp?.blocked || upnp?.lastError || null : null,
-			qrDataUrl: null
+			error: anywhereOn ? upnp?.blocked || upnp?.lastError || null : null
 		}
 	};
 	if (running && info.pairCode) {
+		// One QR, always the home address: pairing is LAN-only (a request to the
+		// internet address loops through the router and no longer looks local),
+		// and away access is handed to the internet origin automatically after
+		// linking (mobile app.js), so no separate away QR is needed.
 		const QRCode = require('qrcode');
 		const qrOpts = { margin: 1, width: 480, color: { dark: '#0e1015ff', light: '#ffffffff' } };
 		info.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${info.pairCode}`, qrOpts);
-		if (info.anywhere.url) {
-			// The Away QR also goes to the HOME address: pairing is LAN-only, and
-			// a request to the internet address loops through the router and no
-			// longer looks local. away=1 makes the phone link here first, then
-			// carry its session over to the internet origin (mobile app.js).
-			info.anywhere.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${info.pairCode}&away=1`, qrOpts);
-		}
 	}
 	return info;
 }

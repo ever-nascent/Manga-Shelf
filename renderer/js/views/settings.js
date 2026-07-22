@@ -124,19 +124,14 @@ export async function render(root, params, ctx, signal) {
 	const codeTimer = h('span', { class: 'remote-timer hint' }, '');
 	const devicesBody = h('div', { class: 'remote-devices-body' });
 
-	// which address the QR encodes; away is only selectable while it exists
-	let qrSource = 'home';
+	// The single QR always links at the home address; away access is handed over
+	// automatically after linking (mobile app.js). These rows just show the two
+	// addresses for reference.
 	let lastInfo = null;
-	const homeRow = h('div', {
-		class: 'settings-row remote-addr active',
-		title: 'Show the QR for the home address',
-		onclick: () => { qrSource = 'home'; if (lastInfo) applyRemote(lastInfo); }
-	}, h('span', { class: 'remote-label' }, 'Home'), urlCode);
-	const awayRow = h('div', {
-		class: 'settings-row remote-addr hidden',
-		title: 'Show the QR for the away address',
-		onclick: () => { qrSource = 'away'; if (lastInfo) applyRemote(lastInfo); }
-	}, h('span', { class: 'remote-label' }, 'Away'), awayCode, awayStatus);
+	const homeRow = h('div', { class: 'settings-row remote-addr' },
+		h('span', { class: 'remote-label' }, 'Home'), urlCode);
+	const awayRow = h('div', { class: 'settings-row remote-addr hidden' },
+		h('span', { class: 'remote-label' }, 'Away'), awayCode, awayStatus);
 
 	const anywhereToggle = h('input', {
 		type: 'checkbox',
@@ -156,7 +151,7 @@ export async function render(root, params, ctx, signal) {
 			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Link Code'), linkCode, codeTimer),
 			h('label', { class: 'check-row' }, anywhereToggle, 'Allow Connections From the Internet'),
 			h('div', { class: 'hint remote-anywhere-hint' },
-				'Asks your router to forward the port (UPnP) so the away address works from any network. Link phones with the Away QR while they are on your Wi-Fi; after that the away address works from anywhere. Traffic to it is not encrypted, and it stops when this PC or MangaShelf is off.')
+				'Asks your router to forward the port (UPnP) so your library is reachable from any network. Link a phone on your Wi-Fi as usual; when this is on, it then offers an away link that works from anywhere. Traffic to the away address is not encrypted, and it stops when this PC or MangaShelf is off.')
 		)
 	);
 	const devicesBlock = h('div', { class: 'remote-devices hidden' },
@@ -230,10 +225,7 @@ export async function render(root, params, ctx, signal) {
 					: aw.error || 'unavailable';
 				awayStatus.classList.toggle('err', aw.status === 'blocked' || aw.status === 'failed');
 			}
-			if (qrSource === 'away' && !aw.qrDataUrl) qrSource = 'home';
-			homeRow.classList.toggle('active', qrSource === 'home');
-			awayRow.classList.toggle('active', qrSource === 'away');
-			qrImg.src = (qrSource === 'away' ? aw.qrDataUrl : info.qrDataUrl) || '';
+			qrImg.src = info.qrDataUrl || '';
 			urlCode.textContent = info.url || '';
 			linkCode.textContent = fmtCode(info.pairCode);
 		}

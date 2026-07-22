@@ -148,17 +148,17 @@ window.addEventListener('remote-unauthorized', () => {
 function pairErrorText(err) {
 	if (err.message === 'bad-code') return 'That code didn’t match or has expired. Check Settings on your PC for the current one.';
 	if (err.message === 'locked') return 'Too many attempts. Wait a few minutes, then try the current code.';
-	if (err.message === 'not-local') return 'New phones can’t link at this internet address. While on the same Wi-Fi as your PC, scan the Away QR in Settings — after that, this address works from anywhere.';
+	if (err.message === 'not-local') return 'This is your PC’s internet address. Link your phone on your home Wi-Fi first — scan the QR in Settings — and it will give you a link to open here. You don’t type a code at this address.';
 	return err.message;
 }
 
-// Arriving via a QR code: a pairing code rides in the hash. The Away QR points
-// at the HOME address and adds away=1 (set up the internet address after
-// linking), and the home page hands the session to the internet origin as
-// #token=… — fragments never leave the browser, so no token goes on the wire.
+// Arriving via a QR code: a pairing code rides in the URL hash. The one QR
+// links at the HOME address; after linking, if internet access is on, the
+// phone is offered a sign-in link for the internet origin, carried there as
+// #token=… — the fragment never leaves the browser, so no token goes on the
+// wire.
 let pendingCode = null;
 let pendingToken = null;
-let pendingAway = false;
 function consumeLinkHash() {
 	const params = new URLSearchParams(location.hash.slice(1));
 	const code = params.get('link');
@@ -166,38 +166,27 @@ function consumeLinkHash() {
 	if (!code && !token) return false;
 	if (code) pendingCode = code.replace(/-/g, '').toUpperCase();
 	if (token) pendingToken = token;
-	pendingAway = params.get('away') === '1';
 	history.replaceState(null, '', location.pathname);
 	return true;
 }
 
-// The internet address is a different origin with its own storage, so the
-// session stored here is invisible there. Ask the PC where it's reachable
-// from the internet and hand the token over in the hash — the page there
-// stores it and boots already linked. Two roads, because routers differ on
-// NAT loopback: if the internet address answers from inside this network,
-// hop straight over; if not (loopback unsupported — common), the hop would
-// dead-end on an error page, so show the link to save and open once away.
+// Just linked at home. The internet address is a separate origin with its own
+// storage, so the session here is invisible there — the phone has to visit it
+// once carrying the token. Whether that's possible from inside the house is up
+// to the router (NAT loopback), and many home routers don't allow it, so
+// rather than gamble on a silent redirect that could dead-end, we always show
+// the sign-in link to save and open once away. Internet access off → nothing
+// to set up, straight into the app.
 async function goSetUpAway() {
 	let url = null;
 	try { url = (await awayInfo()).url; } catch { /* treat as not available */ }
-	if (!url) return startApp(); // internet access is off — linked for home use anyway
-	const link = `${url}/#token=${encodeURIComponent(getToken())}`;
-	const probe = new AbortController();
-	const timer = setTimeout(() => probe.abort(), 4000);
-	try {
-		await fetch(`${url}/`, { mode: 'no-cors', cache: 'no-store', signal: probe.signal });
-		clearTimeout(timer);
-		location.replace(link);
-	} catch {
-		clearTimeout(timer);
-		showAwayLink(link);
-	}
+	if (!url) return startApp();
+	showAwayLink(`${url}/#token=${encodeURIComponent(getToken())}`);
 }
 
-// Linked at home, but the internet address is only reachable from outside.
-// The token rides in the link's hash fragment, which never goes over the
-// wire — opening the link anywhere signs this phone in there.
+// The token rides in the link's hash fragment, which never goes over the wire —
+// opening the link from any network signs this phone in there. Re-scanning the
+// QR on the PC brings this screen back, so a dismissed link is never lost.
 function showAwayLink(link) {
 	document.body.classList.add('linking');
 	clear(content);
@@ -212,7 +201,7 @@ function showAwayLink(link) {
 		h('div', { class: 'link-logo' }, icon('phone', 40)),
 		h('h1', {}, 'Linked!'),
 		h('p', { class: 'hint' },
-			'This phone now works with MangaShelf on your Wi-Fi. To read from outside your home, save this link and open it once you’re away — it signs this phone in from anywhere. It’s a key: don’t share it.'),
+			'This phone works with MangaShelf on your Wi-Fi now. To also read when you’re away from home, save this link and open it once from cellular or another network — it signs this phone in from anywhere, so treat it like a key and don’t share it. You can re-scan the QR on your PC to get it again.'),
 		input,
 		h('button', {
 			class: 'btn primary link-btn',
@@ -222,7 +211,7 @@ function showAwayLink(link) {
 				catch { status.textContent = 'Copy didn’t work — long-press the link to copy it.'; }
 			}
 		}, 'Copy link'),
-		h('button', { class: 'btn link-btn', onclick: () => startApp() }, 'Done'),
+		h('button', { class: 'btn link-btn', onclick: () => startApp() }, 'Use on Wi-Fi for now'),
 		status
 	));
 }
@@ -230,19 +219,21 @@ function showAwayLink(link) {
 async function boot() {
 	consumeLinkHash();
 	// a handed-over session (paired at the home address, delivered here in the
-	// hash) replaces whatever this origin had
+	// hash) replaces whatever this origin had — we're now on the internet origin,
+	// already linked, so drop straight into the app below
 	if (pendingToken) {
 		setToken(pendingToken);
 		pendingToken = null;
 	}
+	const scannedCode = Boolean(pendingCode);
 	// an existing session wins over a scanned code — re-scanning the QR on an
 	// already-linked phone shouldn't register it twice
 	if (getToken()) {
 		try {
 			await rpc('dl:queue');
 			pendingCode = null;
-			if (pendingAway) { pendingAway = false; return goSetUpAway(); }
-			return startApp();
+			// a deliberate (re-)scan offers away setup; a normal app open doesn't
+			return scannedCode ? goSetUpAway() : startApp();
 		} catch (err) {
 			if (err.message !== 'Not linked') { pendingCode = null; return showLink(err.message); }
 			clearToken();
@@ -253,8 +244,7 @@ async function boot() {
 		pendingCode = null;
 		try {
 			await pair(code);
-			if (pendingAway) { pendingAway = false; return goSetUpAway(); }
-			return startApp();
+			return goSetUpAway(); // offers away setup when internet is on, else starts
 		} catch (err) {
 			return showLink(pairErrorText(err));
 		}
