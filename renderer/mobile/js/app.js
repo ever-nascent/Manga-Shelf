@@ -1,7 +1,7 @@
 // Router + boot: link screen until paired, then tab navigation with the
 // browser history API so the phone's back button works naturally.
 
-import { getToken, clearToken, pair, rpc, connectEvents, setQueue, sinceLastMutation } from './api.js';
+import { getToken, setToken, clearToken, pair, rpc, connectEvents, setQueue, sinceLastMutation, awayInfo } from './api.js';
 import { h, clear } from './util.js';
 import { icon } from './icons.js';
 import * as home from './views/home.js';
@@ -148,28 +148,100 @@ window.addEventListener('remote-unauthorized', () => {
 function pairErrorText(err) {
 	if (err.message === 'bad-code') return 'That code didn’t match or has expired. Check Settings on your PC for the current one.';
 	if (err.message === 'locked') return 'Too many attempts. Wait a few minutes, then try the current code.';
-	if (err.message === 'not-local') return 'Link this phone while it’s on the same Wi-Fi as your PC. Once linked, you can use it from anywhere.';
+	if (err.message === 'not-local') return 'New phones can’t link at this internet address. While on the same Wi-Fi as your PC, scan the Away QR in Settings — after that, this address works from anywhere.';
 	return err.message;
 }
 
-// arriving via the QR code: a pairing code rides in the hash
+// Arriving via a QR code: a pairing code rides in the hash. The Away QR points
+// at the HOME address and adds away=1 (set up the internet address after
+// linking), and the home page hands the session to the internet origin as
+// #token=… — fragments never leave the browser, so no token goes on the wire.
 let pendingCode = null;
+let pendingToken = null;
+let pendingAway = false;
 function consumeLinkHash() {
-	const fromQr = /link=([A-Z0-9-]+)/i.exec(location.hash);
-	if (!fromQr) return false;
-	pendingCode = fromQr[1].replace(/-/g, '').toUpperCase();
+	const params = new URLSearchParams(location.hash.slice(1));
+	const code = params.get('link');
+	const token = params.get('token');
+	if (!code && !token) return false;
+	if (code) pendingCode = code.replace(/-/g, '').toUpperCase();
+	if (token) pendingToken = token;
+	pendingAway = params.get('away') === '1';
 	history.replaceState(null, '', location.pathname);
 	return true;
 }
 
+// The internet address is a different origin with its own storage, so the
+// session stored here is invisible there. Ask the PC where it's reachable
+// from the internet and hand the token over in the hash — the page there
+// stores it and boots already linked. Two roads, because routers differ on
+// NAT loopback: if the internet address answers from inside this network,
+// hop straight over; if not (loopback unsupported — common), the hop would
+// dead-end on an error page, so show the link to save and open once away.
+async function goSetUpAway() {
+	let url = null;
+	try { url = (await awayInfo()).url; } catch { /* treat as not available */ }
+	if (!url) return startApp(); // internet access is off — linked for home use anyway
+	const link = `${url}/#token=${encodeURIComponent(getToken())}`;
+	const probe = new AbortController();
+	const timer = setTimeout(() => probe.abort(), 4000);
+	try {
+		await fetch(`${url}/`, { mode: 'no-cors', cache: 'no-store', signal: probe.signal });
+		clearTimeout(timer);
+		location.replace(link);
+	} catch {
+		clearTimeout(timer);
+		showAwayLink(link);
+	}
+}
+
+// Linked at home, but the internet address is only reachable from outside.
+// The token rides in the link's hash fragment, which never goes over the
+// wire — opening the link anywhere signs this phone in there.
+function showAwayLink(link) {
+	document.body.classList.add('linking');
+	clear(content);
+	const input = h('input', {
+		class: 'link-input away-link',
+		readOnly: true,
+		value: link,
+		onclick: () => input.select()
+	});
+	const status = h('div', { class: 'link-status' }, '');
+	content.append(h('div', { class: 'link-screen' },
+		h('div', { class: 'link-logo' }, icon('phone', 40)),
+		h('h1', {}, 'Linked!'),
+		h('p', { class: 'hint' },
+			'This phone now works with MangaShelf on your Wi-Fi. To read from outside your home, save this link and open it once you’re away — it signs this phone in from anywhere. It’s a key: don’t share it.'),
+		input,
+		h('button', {
+			class: 'btn primary link-btn',
+			onclick: () => {
+				input.select();
+				try { document.execCommand('copy'); status.textContent = 'Copied — paste it somewhere safe, like your notes.'; }
+				catch { status.textContent = 'Copy didn’t work — long-press the link to copy it.'; }
+			}
+		}, 'Copy link'),
+		h('button', { class: 'btn link-btn', onclick: () => startApp() }, 'Done'),
+		status
+	));
+}
+
 async function boot() {
 	consumeLinkHash();
+	// a handed-over session (paired at the home address, delivered here in the
+	// hash) replaces whatever this origin had
+	if (pendingToken) {
+		setToken(pendingToken);
+		pendingToken = null;
+	}
 	// an existing session wins over a scanned code — re-scanning the QR on an
 	// already-linked phone shouldn't register it twice
 	if (getToken()) {
 		try {
 			await rpc('dl:queue');
 			pendingCode = null;
+			if (pendingAway) { pendingAway = false; return goSetUpAway(); }
 			return startApp();
 		} catch (err) {
 			if (err.message !== 'Not linked') { pendingCode = null; return showLink(err.message); }
@@ -181,6 +253,7 @@ async function boot() {
 		pendingCode = null;
 		try {
 			await pair(code);
+			if (pendingAway) { pendingAway = false; return goSetUpAway(); }
 			return startApp();
 		} catch (err) {
 			return showLink(pairErrorText(err));

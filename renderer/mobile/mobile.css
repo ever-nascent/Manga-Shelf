@@ -450,3 +450,10 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 }
 .link-btn { width: 100%; max-width: 240px; }
 .link-status { color: var(--red); font-size: 13px; min-height: 18px; }
+/* the away sign-in link is a URL, not a pairing code */
+.away-link {
+	max-width: 320px;
+	font-size: 13px;
+	letter-spacing: 0;
+	text-transform: none;
+}

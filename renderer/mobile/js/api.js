@@ -49,6 +49,20 @@ export async function pair(code) {
 	return data.device;
 }
 
+// Where is this PC reachable from the internet, if anywhere? Authed: only a
+// linked phone may ask. Used to hand this session to that origin (app.js).
+export async function awayInfo() {
+	let res;
+	try {
+		res = await fetch('/awayinfo', { headers: { 'Authorization': `Bearer ${getToken()}` } });
+	} catch {
+		throw new Error('MangaShelf is unreachable. Is it open on your PC?');
+	}
+	const data = await res.json().catch(() => ({}));
+	if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+	return data;
+}
+
 // Change pings echo back to the phone that made the change; remembering our
 // own recent mutations lets the app skip pointless self-refreshes.
 const MUTATING = new Set([

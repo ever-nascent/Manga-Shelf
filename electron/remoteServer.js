@@ -9,6 +9,7 @@
 // Routes:
 //   GET  /            mobile app shell (renderer/mobile/)
 //   POST /pair        exchange the current pairing code for a session token
+//   GET  /awayinfo    where this PC is reachable from the internet (authed)
 //   POST /api/<cmd>   run a registry command, body {args:[...]}
 //   GET  /events      SSE stream: live queue snapshots + change pings
 //   GET  /file?p=     serve a library image (covers/pages), path-checked
@@ -121,6 +122,7 @@ class RemoteServer {
 		this.globalFailures = { count: 0, firstAt: 0, lockedUntil: 0 };
 		this.lastSeenFlushed = new Map(); // device id -> when lastSeenAt last hit disk
 		this.onInfoChanged = null; // main.js: pairing rotated or devices changed
+		this.awayUrl = null; // main.js: () => current internet URL while mapped
 		// phones can't read mangafile:// — local files go through /file instead
 		this.postMap = makePostMap(library, (abs) => '/file?p=' + encodeURIComponent(abs));
 	}
@@ -261,6 +263,13 @@ class RemoteServer {
 		this.json(res, 200, { ok: true, token, device: { id: device.id, name: device.name } });
 	}
 
+	// A linked phone asks where this PC is reachable from the internet, so the
+	// home-address page can hand its session to that origin (mobile app.js).
+	handleAwayInfo(req, res) {
+		if (!this.authedDevice(req)) return this.json(res, 401, { ok: false, error: 'unauthorized' });
+		this.json(res, 200, { ok: true, url: this.awayUrl?.() || null });
+	}
+
 	// ---------- devices ----------
 
 	devices() {
@@ -353,6 +362,7 @@ class RemoteServer {
 		res.setHeader('X-Content-Type-Options', 'nosniff');
 
 		if (u.pathname === '/pair') return this.handlePair(req, res);
+		if (u.pathname === '/awayinfo') return this.handleAwayInfo(req, res);
 		if (u.pathname.startsWith('/api/')) return this.handleApi(req, res, u);
 		if (u.pathname === '/events') return this.handleEvents(req, res);
 		if (u.pathname === '/file') return this.handleFile(req, res, u);

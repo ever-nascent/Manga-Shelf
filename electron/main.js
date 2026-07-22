@@ -304,7 +304,11 @@ async function remoteInfo() {
 		const qrOpts = { margin: 1, width: 480, color: { dark: '#0e1015ff', light: '#ffffffff' } };
 		info.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${info.pairCode}`, qrOpts);
 		if (info.anywhere.url) {
-			info.anywhere.qrDataUrl = await QRCode.toDataURL(`${info.anywhere.url}/#link=${info.pairCode}`, qrOpts);
+			// The Away QR also goes to the HOME address: pairing is LAN-only, and
+			// a request to the internet address loops through the router and no
+			// longer looks local. away=1 makes the phone link here first, then
+			// carry its session over to the internet origin (mobile app.js).
+			info.anywhere.qrDataUrl = await QRCode.toDataURL(`${info.url}/#link=${info.pairCode}&away=1`, qrOpts);
 		}
 	}
 	return info;
@@ -482,6 +486,7 @@ app.whenReady().then(() => {
 			win.webContents.send('remote:info', await remoteInfo());
 		} catch { /* window mid-teardown */ }
 	};
+	remoteServer.awayUrl = () => upnp?.url() || null;
 	if (library.getSettings().remoteEnabled) {
 		remoteServer.start()
 			.then(() => syncAnywhere())

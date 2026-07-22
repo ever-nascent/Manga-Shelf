@@ -153,10 +153,10 @@ export async function render(root, params, ctx, signal) {
 				'Scan the QR code with your phone camera, or open the address in your phone browser and type the link code. Each phone links once and stays linked.'),
 			homeRow,
 			awayRow,
-			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Link code'), linkCode, codeTimer),
-			h('label', { class: 'check-row' }, anywhereToggle, 'Also allow connections from the internet'),
+			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Link Code'), linkCode, codeTimer),
+			h('label', { class: 'check-row' }, anywhereToggle, 'Allow Connections From the Internet'),
 			h('div', { class: 'hint remote-anywhere-hint' },
-				'Asks your router to forward the port (UPnP) so the away address works from any network. Traffic to it is not encrypted, and it stops when this PC or MangaShelf is off.')
+				'Asks your router to forward the port (UPnP) so the away address works from any network. Link phones with the Away QR while they are on your Wi-Fi; after that the away address works from anywhere. Traffic to it is not encrypted, and it stops when this PC or MangaShelf is off.')
 		)
 	);
 	const devicesBlock = h('div', { class: 'remote-devices hidden' },
