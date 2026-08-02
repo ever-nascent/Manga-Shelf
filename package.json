@@ -32,7 +32,7 @@
     },
     "publish": {
       "provider": "github",
-      "owner": "ever-nascent"",
+      "owner": "ever-nascent",
       "repo": "Manga-Shelf",
       "releaseType": "release"
     },
