@@ -466,7 +466,9 @@ select option { background: var(--panel); }
 	border: 1px solid var(--border);
 	border-radius: 10px;
 	padding: 6px;
-	z-index: 300;
+	/* Above the modal backdrop (400): a menu is always opened from whatever is
+	   topmost at the time, and a select inside a dialog is exactly that. */
+	z-index: 500;
 	min-width: 195px;
 	max-height: 340px;
 	overflow-y: auto;
