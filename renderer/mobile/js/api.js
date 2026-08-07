@@ -3,9 +3,17 @@
 // with it; live pushes (queue progress, change pings) arrive over SSE.
 
 const TOKEN_KEY = 'mstoken';
+const GUEST_KEY = 'msguest';
 
 export function getToken() {
 	return localStorage.getItem(TOKEN_KEY) || '';
+}
+
+// A guest holds a token that only works for one read-together session: the
+// reader for one series and nothing else. Worth remembering across a reload so
+// a dropped connection doesn't look like being thrown out.
+export function isGuest() {
+	return localStorage.getItem(GUEST_KEY) === '1';
 }
 
 // The cookie is what lets <img src="/file...">, <img src="/proxy...">, and the
@@ -17,7 +25,28 @@ export function setToken(t) {
 
 export function clearToken() {
 	localStorage.removeItem(TOKEN_KEY);
+	localStorage.removeItem(GUEST_KEY);
 	document.cookie = 'mstoken=; path=/; max-age=0';
+}
+
+// Redeem an invite to read along. Nothing here links a device — the token that
+// comes back reaches the session and no other part of the PC.
+export async function joinAsGuest(code) {
+	let res;
+	try {
+		res = await fetch('/guest', {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ code, name: deviceName() })
+		});
+	} catch {
+		throw new Error('MangaShelf is unreachable. Is it open on the host PC?');
+	}
+	const data = await res.json().catch(() => ({}));
+	if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
+	setToken(data.token);
+	localStorage.setItem(GUEST_KEY, '1');
+	return data.guest;
 }
 
 // the name this phone shows up as in the PC's linked-devices list

@@ -27,7 +27,10 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	const fastBtn = h('button', { class: 'icon-btn small', 'aria-label': 'Faster' }, icon('plus', 20));
 
 	const bar = h('div', { class: 'r-bar' },
-		h('button', { class: 'icon-btn', 'aria-label': 'Back', onclick: ctx.back }, icon('back', 22)),
+		// a guest has no series page to go back to — the book is all they have
+		rt.getRole() === 'guest'
+			? h('span', { class: 'r-guest-badge' }, icon('users', 18))
+			: h('button', { class: 'icon-btn', 'aria-label': 'Back', onclick: ctx.back }, icon('back', 22)),
 		h('div', { class: 'r-titles' },
 			h('div', { class: 'r-manga' }, manga.title),
 			h('div', { class: 'r-ch' }, chapterName(ch))
@@ -110,6 +113,8 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 		coverUrl: manga.coverUrl?.startsWith('http') ? manga.coverUrl : null
 	};
 	const saveProgress = debounce(() => {
+		// a guest is reading someone else's book; their place is not the owner's
+		if (rt.getRole() === 'guest') return;
 		rpc('reading:set', snap, { chapterId: ch.id, chapterNum: ch.num, page: current }).catch(() => {});
 	}, 800);
 	signal.addEventListener('abort', () => saveProgress.flush(), { once: true });
@@ -126,7 +131,10 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 
 	const pushSync = debounce(() => rt.sync(index, current, imgs.length), 300);
 
-	const inSession = () => ['host', 'guest'].includes(rt.getRole());
+	// On a phone there is only ever one role worth having: a guest someone
+	// invited. Your own linked phone isn't a session participant — the PC holds
+	// the host seat — so for it none of this shows at all.
+	const inSession = () => rt.getRole() === 'guest';
 	const hereNow = () => rt.getSession()?.manga.id === manga.id;
 	const allReady = () => !(rt.getSession()?.waitingOn.length);
 
@@ -153,12 +161,11 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 
 	function renderRt() {
 		const s = rt.getSession();
-		const role = rt.getRole();
 
-		rtBtn.classList.toggle('active', Boolean(role));
-		rtBtn.setAttribute('aria-label', inSession() ? 'Who\'s reading'
-			: role === 'pending' ? 'Waiting to be let in'
-				: s ? 'Ask to join' : 'Read together');
+		// nothing read-together to show unless we were invited to one
+		rtBtn.classList.toggle('hidden', !inSession());
+		rtBtn.classList.toggle('active', inSession());
+		rtBtn.setAttribute('aria-label', 'Who\'s reading');
 
 		const mine = rt.me();
 		const show = inSession() && hereNow() && mine;
@@ -196,42 +203,21 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 			));
 		}
 
-		if (role === 'host' && s.pending.length) {
-			rtPanel.append(h('div', { class: 'rt-panel-sub' }, 'Asking to join'));
-			for (const req of s.pending) {
-				rtPanel.append(h('div', { class: 'rt-row pending' },
-					h('span', { class: 'rt-name' }, req.name),
-					h('button', { class: 'btn small primary', onclick: () => rt.approve(req.id).catch((e) => toast(e.message, 'error')) }, 'Allow'),
-					h('button', { class: 'btn small', onclick: () => rt.deny(req.id).catch((e) => toast(e.message, 'error')) }, 'Deny')
-				));
-			}
-		}
-
-		if (role === 'host') {
-			const hard = s.gate === 'hard';
-			rtPanel.append(h('label', { class: 'rt-gate' },
-				h('input', {
-					type: 'checkbox',
-					checked: hard,
-					onchange: (e) => rt.setGate(e.target.checked ? 'hard' : 'soft').catch((err) => toast(err.message, 'error'))
-				}),
-				h('span', {}, 'Wait for everyone'),
-				h('span', { class: 'rt-gate-hint' }, hard
-					? 'Nobody can move on until all are ready'
-					: 'Anyone may read ahead on their own')
-			));
-		}
+		// the gate is the host's to set, so it's shown here as a fact, not a control
+		rtPanel.append(h('div', { class: 'rt-gate-note' }, s.gate === 'hard'
+			? 'Everyone has to finish a chapter before the group moves on.'
+			: 'You can read ahead at your own pace.'));
 
 		rtPanel.append(h('button', {
 			class: 'btn wide',
 			onclick: async () => {
 				try {
 					await rt.leave();
-					toast(role === 'host' ? 'Read together ended.' : 'You left the session.');
+					toast('You left the session.');
 				} catch (err) { toast(err.message, 'error'); }
 				rtPanel.classList.add('hidden');
 			}
-		}, role === 'host' ? 'End session' : 'Leave session'));
+		}, 'Leave session'));
 	}
 
 	async function promptRename() {
@@ -246,31 +232,9 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 		if (mine) rt.setReady(!mine.ready).catch((err) => toast(err.message, 'error'));
 	});
 
-	rtBtn.addEventListener('click', async () => {
-		const s = rt.getSession();
-		if (inSession() || rt.getRole() === 'pending') {
-			rtPanel.classList.toggle('hidden');
-			renderPanel();
-			return;
-		}
-		try {
-			if (s) {
-				const joined = await rt.join();
-				if (rt.getRole() === 'pending') toast('Asked to join — waiting for the host.');
-				else if (joined.manga.id !== manga.id) {
-					ctx.navigate('reader', {
-						manga: joined.manga, chapters: joined.chapters, index: joined.index
-					}, { replace: true });
-					return;
-				}
-			} else {
-				await rt.start(manga, chapters, index, 'soft');
-				toast('Reading together — your other devices can ask to join.', 'success');
-			}
-		} catch (err) {
-			toast(err.message, 'error');
-		}
-		renderRt();
+	rtBtn.addEventListener('click', () => {
+		rtPanel.classList.toggle('hidden');
+		renderPanel();
 	});
 
 	// The gate moved: anyone still on the old chapter comes along.
@@ -280,11 +244,7 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 		if (index < s.index) ctx.navigate('reader', { manga, chapters, index: s.index }, { replace: true });
 	}
 
-	window.addEventListener('rt-change', (e) => {
-		if (e.detail.declined) toast('The host didn\'t let you in.', 'error');
-		renderRt();
-		followGate();
-	}, { signal });
+	window.addEventListener('rt-change', () => { renderRt(); followGate(); }, { signal });
 	renderRt();
 
 	let pages = [];

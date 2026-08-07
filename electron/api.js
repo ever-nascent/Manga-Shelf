@@ -30,7 +30,7 @@ const MUTATES = {
 // the same no matter who asked.
 const NEEDS_ACTOR = new Set([
 	'rt:state', 'rt:start', 'rt:join', 'rt:leave', 'rt:sync', 'rt:ready',
-	'rt:gate', 'rt:chapter', 'rt:approve', 'rt:deny', 'device:rename'
+	'rt:gate', 'rt:chapter', 'rt:approve', 'rt:deny', 'rt:kick', 'device:rename'
 ]);
 
 // the desktop's well-known actor id (main.js hands it to every IPC dispatch)
@@ -141,6 +141,7 @@ function createApi({ library, downloader, cache, onChange, onDevicesChanged, rea
 		'rt:chapter': (actor, index) => readTogether.setChapter(actor, index),
 		'rt:approve': (actor, id) => readTogether.approve(actor, id),
 		'rt:deny': (actor, id) => readTogether.deny(actor, id),
+		'rt:kick': (actor, id) => readTogether.kick(actor, id),
 
 		// ----- naming yourself -----
 		'device:rename': (actor, name) => renameSelf(actor, name)

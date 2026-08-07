@@ -479,6 +479,18 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 }
 .rt-gate input { accent-color: var(--accent); width: 18px; height: 18px; }
 .rt-gate .rt-gate-hint { grid-column: 2; font-size: 11.5px; color: var(--muted); }
+.rt-gate-note {
+	font-size: 11.5px;
+	color: var(--muted);
+	margin-top: 6px;
+	padding-top: 10px;
+	border-top: 1px solid var(--border);
+}
+.r-guest-badge { display: inline-flex; align-items: center; color: var(--accent); padding: 0 8px; }
+
+/* a guest gets the reader and nothing else — no tabs to anywhere */
+body.guest #nav { display: none; }
+body.guest #content { padding-bottom: 0; }
 
 /* above the reader bar (50) so an invite still lands mid-chapter, below toasts (90) */
 .rt-banner {

@@ -892,7 +892,30 @@ select option { background: var(--panel); }
 }
 .rt-panel .btn.wide { width: 100%; margin-top: 8px; }
 
-/* above the reader (50) so an invite still lands mid-chapter, below toasts (100) */
+/* invite dialog */
+.invite-result { display: flex; flex-direction: column; gap: 8px; align-items: stretch; }
+.invite-qr {
+	width: 190px;
+	height: 190px;
+	align-self: center;
+	border-radius: 8px;
+	background: #fff;
+	padding: 6px;
+}
+.invite-link {
+	width: 100%;
+	font-family: ui-monospace, Consolas, monospace;
+	font-size: 12px;
+	padding: 8px 10px;
+	background: var(--bg2);
+	border: 1px solid var(--border);
+	border-radius: 6px;
+	color: var(--text);
+}
+.invite-actions { display: flex; align-items: center; gap: 10px; }
+.rt-panel .btn.wide + .btn.wide { margin-top: 4px; }
+
+/* above the reader (50), below toasts (100) */
 .rt-banner {
 	position: fixed;
 	bottom: 22px;

@@ -54,6 +54,21 @@ const PAIR_ANSWER_TTL_MS = 60_000;
 // What the Settings screen reports as "recent"
 const PAIR_ATTEMPT_WINDOW_MS = 60 * 60_000;
 
+// An invite to read along is meant to be used in the next minute or two, by
+// someone standing next to you or on the other end of a message.
+const INVITE_TTL_MS = 10 * 60_000;
+const MAX_INVITE_TTL_MS = 24 * 60 * 60_000;
+
+// Everything a read-together guest is allowed to ask for. Anything outside this
+// is refused no matter what their client sends — the phone UI hiding the rest
+// is a convenience, this is the actual boundary. Note there's no lib:all,
+// no lib:get, no search, no downloads, and no reading progress: a guest can
+// read the pages of the series being read together, and do nothing else.
+const GUEST_COMMANDS = new Set([
+	'rt:state', 'rt:join', 'rt:leave', 'rt:sync', 'rt:ready',
+	'lib:pages', 'md:chapterImages', 'device:rename'
+]);
+
 const PROXY_HOSTS = /^(uploads\.mangadex\.org|[a-z0-9-]+\.mangadex\.network|i\d+\.mangakatana\.com|mangakatana\.com)$/;
 
 const MIME = {
@@ -137,6 +152,11 @@ class RemoteServer {
 		this.pendingPairs = new Map(); // requestId -> a device waiting to be let in
 		this.pairAttempts = []; // { at, addr, outcome } — what Settings reports
 		this.onPairRequest = null; // main.js: ask the user about a new device
+		// Read-together guests: someone invited to read along, and nothing else.
+		// Never written to disk and never a linked device — the token is only
+		// good for the session it was minted for, so it dies when that ends.
+		this.guests = new Map(); // token hash -> { id, name, sessionId }
+		this.invites = new Map(); // code -> { sessionId, expiresAt }
 		this.lastSeenFlushed = new Map(); // device id -> when lastSeenAt last hit disk
 		this.onInfoChanged = null; // main.js: pairing rotated or devices changed
 		this.awayUrl = null; // main.js: () => current internet URL while mapped
@@ -401,14 +421,20 @@ class RemoteServer {
 		return this.library.getSettings().remoteDevices || [];
 	}
 
+	// linked devices only — this is what the Settings list shows as "connected"
 	connectedDeviceIds() {
-		return new Set(this.sseClients.values());
+		return new Set([...this.sseClients.values()].filter((a) => a.kind === 'device').map((a) => a.id));
+	}
+
+	// everyone holding a stream, guests included
+	connectedIds() {
+		return new Set([...this.sseClients.values()].map((a) => a.id));
 	}
 
 	revokeDevice(id) {
 		this.library.setSettings({ remoteDevices: this.devices().filter((d) => d.id !== id) });
-		for (const [client, deviceId] of this.sseClients) {
-			if (deviceId === id) { client.end(); this.sseClients.delete(client); }
+		for (const [client, actor] of this.sseClients) {
+			if (actor.id === id) { client.end(); this.sseClients.delete(client); }
 		}
 		this.readTogether?.dropDevice(id);
 		this.onInfoChanged?.();
@@ -432,11 +458,15 @@ class RemoteServer {
 		});
 	}
 
-	authedDevice(req) {
+	presentedToken(req) {
 		const header = req.headers.authorization || '';
 		const bearer = header.startsWith('Bearer ') ? header.slice(7) : null;
 		const cookie = /(?:^|;\s*)mstoken=([A-Za-z0-9_-]+)/.exec(req.headers.cookie || '')?.[1];
-		const given = bearer || cookie;
+		return bearer || cookie || null;
+	}
+
+	authedDevice(req) {
+		const given = this.presentedToken(req);
 		if (!given) return null;
 		const digest = crypto.createHash('sha256').update(given).digest();
 		for (const device of this.devices()) {
@@ -447,6 +477,144 @@ class RemoteServer {
 			}
 		}
 		return null;
+	}
+
+	// A guest's token is only ever valid for the one session it was minted for.
+	// Nothing needs cleaning up when a session ends — the id stops matching and
+	// every token from it is dead.
+	authedGuest(req) {
+		const given = this.presentedToken(req);
+		if (!given) return null;
+		const guest = this.guests.get(hashToken(given));
+		if (!guest) return null;
+		if (guest.sessionId !== this.readTogether?.session?.id) return null;
+		return guest;
+	}
+
+	// Who is making this request: a linked device, or someone invited to read
+	// along. `kind` is what every restriction below keys off.
+	authedActor(req) {
+		const device = this.authedDevice(req);
+		if (device) return { id: device.id, name: device.name, kind: 'device' };
+		const guest = this.authedGuest(req);
+		return guest ? { id: guest.id, name: guest.name, kind: 'guest' } : null;
+	}
+
+	// ---------- inviting someone to read along ----------
+
+	// The host makes one of these deliberately and decides how far it stretches:
+	// an invite good for one person can't be forwarded to a crowd, which is the
+	// job a per-guest approval prompt would otherwise be doing.
+	createInvite({ maxUses = 1, ttlMs = INVITE_TTL_MS } = {}) {
+		const session = this.readTogether?.session;
+		if (!session) throw new Error('Start reading together first.');
+		this.pruneInvites();
+		const code = generatePairCode();
+		const expiresAt = Date.now() + Math.max(60_000, Math.min(Number(ttlMs) || INVITE_TTL_MS, MAX_INVITE_TTL_MS));
+		// 0 means no limit; anything else is clamped to something sane
+		const uses = Math.max(0, Math.min(Math.trunc(Number(maxUses)) || 0, 50));
+		this.invites.set(code, { sessionId: session.id, expiresAt, maxUses: uses, used: 0 });
+		// Reachable from wherever the guest actually is. A guest token is a far
+		// smaller thing to expose than a device token — one series, read-only,
+		// and dead the moment the host closes the book.
+		const url = this.awayUrl?.() || this.bestUrl();
+		return { code, url, expiresAt, maxUses: uses };
+	}
+
+	pruneInvites() {
+		const now = Date.now();
+		const liveSession = this.readTogether?.session?.id;
+		for (const [code, inv] of this.invites) {
+			const spent = inv.maxUses > 0 && inv.used >= inv.maxUses;
+			if (inv.expiresAt < now || spent || inv.sessionId !== liveSession) this.invites.delete(code);
+		}
+		for (const [hash, g] of this.guests) {
+			if (g.sessionId !== liveSession) this.guests.delete(hash);
+		}
+	}
+
+	inviteSummary() {
+		this.pruneInvites();
+		return [...this.invites.entries()].map(([code, inv]) => ({
+			code,
+			expiresAt: inv.expiresAt,
+			maxUses: inv.maxUses,
+			used: inv.used
+		}));
+	}
+
+	revokeInvite(code) {
+		return this.invites.delete(code);
+	}
+
+	async handleGuest(req, res) {
+		if (req.method !== 'POST') return this.json(res, 405, { ok: false, error: 'POST only' });
+		const addr = req.socket.remoteAddress || 'unknown';
+		// An invite code is as guessable as a pairing code, so it earns the same
+		// lockouts rather than a fresh guessing budget.
+		if (this.pairingLocked(addr)) return this.json(res, 429, { ok: false, error: 'locked' });
+
+		let body = {};
+		try {
+			const raw = await readBody(req);
+			if (raw) body = JSON.parse(raw);
+		} catch {
+			return this.json(res, 400, { ok: false, error: 'Bad JSON body' });
+		}
+		this.pruneInvites();
+		const code = String(body.code || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
+		const invite = this.invites.get(code);
+		const session = this.readTogether?.session;
+		if (!invite || !session || invite.sessionId !== session.id) {
+			this.registerPairFailure(addr);
+			return this.json(res, 401, { ok: false, error: 'bad-code' });
+		}
+		if (invite.maxUses > 0 && invite.used >= invite.maxUses) {
+			return this.json(res, 410, { ok: false, error: 'used-up' });
+		}
+		this.pairFailures.delete(addr);
+		invite.used++;
+		if (invite.maxUses > 0 && invite.used >= invite.maxUses) this.invites.delete(code);
+
+		const token = generateSessionToken();
+		const guest = {
+			id: `g${crypto.randomBytes(5).toString('hex')}`,
+			name: sanitizeDeviceName(body.name) || 'Guest',
+			sessionId: session.id
+		};
+		this.guests.set(hashToken(token), guest);
+		// the invite was the host's yes; joining doesn't need a second one
+		this.readTogether.addGuest(guest);
+		this.onInfoChanged?.();
+		this.json(res, 200, { ok: true, token, guest: { id: guest.id, name: guest.name } });
+	}
+
+	// ---------- what a guest may do ----------
+
+	// The session's own chapters, and nothing else in the library. Without this
+	// a guest could hand any id to lib:pages and read whatever they liked.
+	guestMayReadChapter(chapterId) {
+		const session = this.readTogether?.session;
+		return Boolean(session) && session.chapters.some((c) => c.id === chapterId);
+	}
+
+	guestArgsAllowed(cmd, args) {
+		if (cmd === 'lib:pages') {
+			const [mangaId, chapterId] = args;
+			return mangaId === this.readTogether?.session?.manga.id && this.guestMayReadChapter(chapterId);
+		}
+		if (cmd === 'md:chapterImages') return this.guestMayReadChapter(args[0]);
+		return true;
+	}
+
+	// Local page files live under the manga's own folder; a guest gets that
+	// folder and no other part of the library.
+	guestMayReadFile(abs) {
+		const session = this.readTogether?.session;
+		const entry = session && this.library.get(session.manga.id);
+		if (!entry?.path) return false;
+		const root = path.resolve(entry.path);
+		return abs === root || abs.startsWith(root + path.sep);
 	}
 
 	// ---------- live events ----------
@@ -466,7 +634,11 @@ class RemoteServer {
 	send(event, data) {
 		if (!this.sseClients.size) return;
 		const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
-		for (const client of this.sseClients.keys()) client.write(frame);
+		for (const [client, actor] of this.sseClients) {
+			// a guest hears about the session and nothing else going on here
+			if (actor.kind === 'guest' && event !== 'rt') continue;
+			client.write(frame);
+		}
 	}
 
 	// The address a phone should use. Multiple NICs are common (VPN, virtual
@@ -494,6 +666,7 @@ class RemoteServer {
 
 		if (u.pathname === '/pair') return this.handlePair(req, res);
 		if (u.pathname === '/pairstatus') return this.handlePairStatus(req, res, u);
+		if (u.pathname === '/guest') return this.handleGuest(req, res);
 		if (u.pathname === '/awayinfo') return this.handleAwayInfo(req, res);
 		if (u.pathname.startsWith('/api/')) return this.handleApi(req, res, u);
 		if (u.pathname === '/events') return this.handleEvents(req, res);
@@ -504,8 +677,8 @@ class RemoteServer {
 
 	async handleApi(req, res, u) {
 		if (req.method !== 'POST') return this.json(res, 405, { ok: false, error: 'POST only' });
-		const device = this.authedDevice(req);
-		if (!device) return this.json(res, 401, { ok: false, error: 'unauthorized' });
+		const actor = this.authedActor(req);
+		if (!actor) return this.json(res, 401, { ok: false, error: 'unauthorized' });
 
 		const cmd = decodeURIComponent(u.pathname.slice('/api/'.length));
 		if (!this.api.commands[cmd]) return this.json(res, 404, { ok: false, error: `Unknown command: ${cmd}` });
@@ -518,10 +691,19 @@ class RemoteServer {
 			return this.json(res, 400, { ok: false, error: 'Bad JSON body' });
 		}
 
+		// A guest is here to read one series with someone, not to browse a
+		// library that isn't theirs. Enforced here rather than in their UI,
+		// because their UI is not something we control.
+		if (actor.kind === 'guest') {
+			if (!GUEST_COMMANDS.has(cmd) || !this.guestArgsAllowed(cmd, args)) {
+				return this.json(res, 403, { ok: false, error: 'Not allowed for guests' });
+			}
+		}
+
 		try {
-			// the linked device is the caller's identity — read-together needs to
-			// know which phone is hosting, joining, or turning pages
-			let result = await this.api.dispatch(cmd, args, 'remote', { id: device.id, name: device.name });
+			// the caller's identity — read-together needs to know who is hosting,
+			// who just turned a page, and who is only a guest
+			let result = await this.api.dispatch(cmd, args, 'remote', actor);
 			if (this.postMap[cmd]) result = this.postMap[cmd](result);
 			this.json(res, 200, { ok: true, result: result ?? null });
 		} catch (err) {
@@ -530,38 +712,47 @@ class RemoteServer {
 	}
 
 	handleEvents(req, res) {
-		const device = this.authedDevice(req);
-		if (!device) return this.json(res, 401, { ok: false, error: 'unauthorized' });
+		const actor = this.authedActor(req);
+		if (!actor) return this.json(res, 401, { ok: false, error: 'unauthorized' });
 		res.writeHead(200, {
 			'Content-Type': 'text/event-stream',
 			'Cache-Control': 'no-cache',
 			'Connection': 'keep-alive'
 		});
 		res.write('retry: 3000\n\n');
-		// current queue right away so the Downloads view never starts stale
-		res.write(`event: queue\ndata: ${JSON.stringify(this.downloader.snapshot())}\n\n`);
-		// whatever is being read together, so a phone that reconnects mid-session
-		// doesn't sit there thinking nothing is running
+		// the download queue is the owner's business, not a guest's
+		if (actor.kind === 'device') {
+			res.write(`event: queue\ndata: ${JSON.stringify(this.downloader.snapshot())}\n\n`);
+		}
+		// whatever is being read together, so a reconnecting client doesn't sit
+		// there thinking nothing is running
 		if (this.readTogether?.active()) {
 			res.write(`event: rt\ndata: ${JSON.stringify({ type: 'started', session: this.readTogether.snapshot() })}\n\n`);
 		}
-		this.sseClients.set(res, device.id);
-		this.onInfoChanged?.(); // the device just went "connected"
+		this.sseClients.set(res, actor);
+		this.onInfoChanged?.(); // this client just went "connected"
 		req.on('close', () => {
 			this.sseClients.delete(res);
 			// A reconnecting phone briefly holds two streams, and the old one can
-			// close after the new one opens — only count the device as gone once
-			// its last stream is down, or a blip would drop it from the session.
-			if (!this.connectedDeviceIds().has(device.id)) this.readTogether?.dropDevice(device.id);
+			// close after the new one opens — only count it as gone once its last
+			// stream is down, or a blip would drop it from the session.
+			if (!this.connectedIds().has(actor.id)) this.readTogether?.dropDevice(actor.id);
 			this.onInfoChanged?.();
 		});
 	}
 
 	handleFile(req, res, u) {
-		if (!this.authedDevice(req)) return this.json(res, 401, { ok: false, error: 'unauthorized' });
+		const actor = this.authedActor(req);
+		if (!actor) return this.json(res, 401, { ok: false, error: 'unauthorized' });
 		const p = u.searchParams.get('p');
 		if (!p) return this.json(res, 400, { ok: false, error: 'Missing path' });
 		const abs = path.resolve(p);
+		// Pages of the shared series only — the rest of the library isn't theirs.
+		// Checked before the file is looked at, so probing can't tell a guest
+		// which paths exist.
+		if (actor.kind === 'guest' && !this.guestMayReadFile(abs)) {
+			return this.json(res, 403, { ok: false, error: 'Not allowed for guests' });
+		}
 		if (!this.library.isAllowedPath(abs) || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
 			return this.json(res, 404, { ok: false, error: 'Not found' });
 		}
@@ -573,7 +764,9 @@ class RemoteServer {
 	}
 
 	async handleProxy(req, res, u) {
-		if (!this.authedDevice(req)) return this.json(res, 401, { ok: false, error: 'unauthorized' });
+		// guests included: streamed pages come through here, and the host
+		// allowlist below already limits this to manga CDNs
+		if (!this.authedActor(req)) return this.json(res, 401, { ok: false, error: 'unauthorized' });
 		let target;
 		try {
 			target = new URL(u.searchParams.get('url'));

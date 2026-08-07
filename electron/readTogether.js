@@ -146,6 +146,9 @@ class ReadTogether {
 
 	start(actor, manga, chapters, index = 0, gate = 'soft') {
 		if (!actor?.id) throw new Error('Unknown caller');
+		// The PC holds the library and serves every page, so it holds the host
+		// seat too. Only main.js marks an actor as able to host.
+		if (!actor.canHost) throw new Error('Only this PC can start a session');
 		if (!manga?.id) throw new Error('Nothing to read together');
 		const list = normalizeChapters(chapters);
 		if (!list.length) throw new Error('That series has no chapters to share');
@@ -191,11 +194,12 @@ class ReadTogether {
 		});
 	}
 
-	// Asking to join doesn't get you in — the host decides. Already-approved
-	// callers land straight back on the full session, so a guest reopening the
-	// reader can ask again for the chapter list without queueing twice.
+	// Only invited guests join. A linked device is the host's own hardware —
+	// their phone joining their own session would just be them twice — so
+	// devices host and guests join, and the two never blur together.
 	join(actor) {
 		if (!actor?.id) throw new Error('Unknown caller');
+		if (actor.kind !== 'guest') throw new Error('Only invited guests can join a session');
 		const s = this.session;
 		if (!s) throw new Error('No one is reading together right now');
 		this.prunePending();
@@ -209,6 +213,27 @@ class ReadTogether {
 			});
 			this.emit('pending');
 		}
+		return this.view(actor);
+	}
+
+	// Someone who redeemed an invite. The invite is the host's yes — they made
+	// it deliberately, it expires, and it only stretches to the number of people
+	// they said — so there's no second gate to pass.
+	addGuest(guest) {
+		const s = this.session;
+		if (!s || s.participants.has(guest.id)) return;
+		this.addParticipant({ id: guest.id, name: guest.name });
+		this.recomputeAll();
+		this.emit('joined');
+	}
+
+	// The host can show someone out again without ending the whole session.
+	kick(actor, id) {
+		const s = this.requireHost(actor);
+		if (id === s.hostId) throw new Error('The host can\'t be removed');
+		if (!s.participants.delete(id)) throw new Error('They\'re not in this session');
+		this.advanceWhileReady(); // one fewer to wait for may be all the gate needed
+		this.emit('participants');
 		return this.view(actor);
 	}
 

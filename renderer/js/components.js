@@ -171,6 +171,100 @@ export function confirmUpdateReady(version) {
 	});
 }
 
+// ---------- inviting someone to read along ----------
+
+const INVITE_USES = [
+	[1, 'One person'],
+	[2, 'Two people'],
+	[5, 'Five people'],
+	[0, 'No limit']
+];
+const INVITE_TTL = [
+	[10 * 60_000, '10 minutes'],
+	[60 * 60_000, '1 hour'],
+	[24 * 60 * 60_000, '24 hours']
+];
+
+// Make a link, show it as a QR and as text to copy. Deliberately spells out
+// what the guest gets, because "here's a link to my library" and "here's a
+// link to read one book with me" are very different things to hand someone.
+export function openInviteDialog() {
+	const { body, close } = openModal('Invite someone to read along');
+	let maxUses = 1;
+	let ttlMs = 10 * 60_000;
+
+	const usesSel = styledSelect({
+		small: true, value: maxUses,
+		options: INVITE_USES.map(([value, label]) => ({ value, label })),
+		onChange: (v) => { maxUses = Number(v); }
+	});
+	const ttlSel = styledSelect({
+		small: true, value: ttlMs,
+		options: INVITE_TTL.map(([value, label]) => ({ value, label })),
+		onChange: (v) => { ttlMs = Number(v); }
+	});
+
+	const result = h('div', { class: 'invite-result hidden' });
+	const status = h('div', { class: 'hint' }, '');
+	const makeBtn = h('button', { class: 'btn primary wide' }, 'Create invite');
+
+	makeBtn.addEventListener('click', async () => {
+		makeBtn.disabled = true;
+		status.textContent = 'Creating…';
+		try {
+			const invite = await window.api.inviteToReadTogether({ maxUses, ttlMs });
+			status.textContent = '';
+			renderInvite(invite);
+		} catch (err) {
+			status.textContent = err.message;
+		}
+		makeBtn.disabled = false;
+	});
+
+	function renderInvite(invite) {
+		clear(result);
+		const link = h('input', {
+			class: 'invite-link', readOnly: true, value: invite.link,
+			onclick: () => link.select()
+		});
+		const copied = h('span', { class: 'hint' }, '');
+		result.append(
+			h('img', { class: 'invite-qr', src: invite.qrDataUrl, alt: 'Invite QR code' }),
+			h('div', { class: 'hint' }, invite.remote
+				? 'This link works from any network.'
+				: 'This link only works on your Wi-Fi.'),
+			link,
+			h('div', { class: 'invite-actions' },
+				h('button', {
+					class: 'btn small',
+					onclick: () => {
+						link.select();
+						try { document.execCommand('copy'); copied.textContent = 'Copied.'; }
+						catch { copied.textContent = 'Copy didn\'t work — long-press to copy.'; }
+					}
+				}, 'Copy link'),
+				copied
+			),
+			h('div', { class: 'hint' },
+				`Good for ${invite.maxUses === 0 ? 'any number of people' : invite.maxUses === 1 ? 'one person' : `${invite.maxUses} people`}, `
+				+ `until ${new Date(invite.expiresAt).toLocaleTimeString()}.`)
+		);
+		result.classList.remove('hidden');
+	}
+
+	body.append(
+		h('div', { class: 'hint' },
+			'They\'ll get the reader for this series and nothing else — they can\'t see your library, '
+			+ 'search, download, or delete anything. Their access ends the moment you close the book.'),
+		h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Good for'), usesSel.el),
+		h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Expires in'), ttlSel.el),
+		makeBtn,
+		status,
+		result
+	);
+	return { close };
+}
+
 // ---------- a new device wants to link ----------
 
 // Resolves 'allow' | 'deny'. Dismissing means deny — the safe answer, since
@@ -193,6 +287,34 @@ export function confirmNewDevice({ name, addr }) {
 				value: 'deny', icon: 'x',
 				label: 'Deny',
 				hint: 'Turn it away. If this wasn\'t you, nothing was given out.'
+			}
+		]
+	});
+}
+
+// ---------- closing a book other people are reading ----------
+
+// Resolves 'end' | 'stay'. Dismissing means stay, since ending cuts everyone
+// else off mid-chapter.
+export function confirmEndSession(names) {
+	const who = names.length === 1 ? names[0]
+		: names.length === 2 ? `${names[0]} and ${names[1]}`
+			: `${names.length} people`;
+	return choiceDialog({
+		title: 'Others are still reading',
+		message: `${who} ${names.length === 1 ? 'is' : 'are'} reading this with you. `
+			+ 'Closing the book ends the session and they lose access straight away.',
+		dismissValue: 'stay',
+		choices: [
+			{
+				value: 'stay', icon: 'check', cls: 'primary',
+				label: 'Keep reading',
+				hint: 'Stay in the book and leave the session running.'
+			},
+			{
+				value: 'end', icon: 'x',
+				label: 'End the session',
+				hint: 'Close the book. Everyone else stops reading too.'
 			}
 		]
 	});

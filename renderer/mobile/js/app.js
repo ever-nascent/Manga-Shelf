@@ -1,7 +1,10 @@
 // Router + boot: link screen until paired, then tab navigation with the
 // browser history API so the phone's back button works naturally.
 
-import { getToken, setToken, clearToken, pair, rpc, connectEvents, setQueue, sinceLastMutation, awayInfo } from './api.js';
+import {
+	getToken, setToken, clearToken, pair, rpc, connectEvents, setQueue,
+	sinceLastMutation, awayInfo, isGuest, joinAsGuest
+} from './api.js';
 import { h, clear, toast } from './util.js';
 import { icon } from './icons.js';
 import * as rt from './readTogether.js';
@@ -92,89 +95,43 @@ window.addEventListener('remote-change', (e) => {
 
 // ---------- read together ----------
 
-// Someone started a session — offer to join from wherever we are, since it's
-// only worth anything while it's running. Once joined (or waved off) the banner
-// goes away and the reader's own controls take over.
-const rtBanner = h('div', { class: 'rt-banner hidden' });
-document.body.append(rtBanner);
-let rtDismissed = null; // the one session the user said no to
-let rtWasPending = false; // so we can spot the moment the host lets us in
-
-function renderRtBanner() {
-	const s = rt.getSession();
-	const role = rt.getRole();
-	clear(rtBanner);
-
-	// The host answers join requests here rather than only in the reader's
-	// roster panel — a request is no use if it lands behind a closed panel.
-	if (s && role === 'host' && s.pending.length) {
-		const req = s.pending[0];
-		rtBanner.classList.remove('hidden');
-		rtBanner.append(
-			h('div', { class: 'rt-text' },
-				h('div', { class: 'rt-who' }, `${req.name} wants to join`),
-				h('div', { class: 'rt-what' }, s.manga.title)
-			),
-			h('button', { class: 'btn primary small', onclick: () => rt.approve(req.id).catch((e) => toast(e.message, 'error')) }, 'Allow'),
-			h('button', { class: 'btn small', onclick: () => rt.deny(req.id).catch((e) => toast(e.message, 'error')) }, 'Deny')
-		);
-		return;
-	}
-
-	if (s && role === 'pending') {
-		rtBanner.classList.remove('hidden');
-		rtBanner.append(h('div', { class: 'rt-text' },
-			h('div', { class: 'rt-who' }, 'Asking to join…'),
-			h('div', { class: 'rt-what' }, `Waiting for the host of ${s.manga.title}`)
-		));
-		return;
-	}
-
-	const offer = Boolean(s) && !role && s.id !== rtDismissed;
-	rtBanner.classList.toggle('hidden', !offer);
-	if (!offer) return;
-	const host = s.participants.find((p) => p.host);
-	rtBanner.append(
-		h('div', { class: 'rt-text' },
-			h('div', { class: 'rt-who' }, `${host?.name || 'Someone'} is reading together`),
-			h('div', { class: 'rt-what' }, s.manga.title)
-		),
-		h('button', { class: 'btn primary small', onclick: joinReadTogether }, 'Ask to join'),
-		h('button', {
-			class: 'icon-btn small',
-			'aria-label': 'Not now',
-			onclick: () => { rtDismissed = s.id; renderRtBanner(); }
-		}, icon('x', 18))
-	);
+// This phone is either a linked device (your own hardware, full access) or a
+// guest someone invited to read one series with them. A guest never sees the
+// tabs, the library, or anything else — just the reader.
+export function guestMode() {
+	return isGuest();
 }
 
-async function joinReadTogether() {
+// Drop a guest straight into the shared book. rt:join is what carries the
+// chapter list; redeeming the invite already put them in the session.
+async function openGuestSession() {
+	document.body.classList.add('guest');
+	linked = true;
+	connectEvents();
 	try {
 		const session = await rt.join();
-		// approved already (rejoining) — the reply carries the chapter list
-		if (session?.chapters) openSession(session);
+		if (!session?.chapters) throw new Error('That session has ended.');
+		navigate('reader', { manga: session.manga, chapters: session.chapters, index: session.index }, { replace: true });
 	} catch (err) {
-		toast(err.message, 'error');
+		showGuestOver(err.message);
 	}
-	renderRtBanner();
 }
 
-function openSession(session) {
-	navigate('reader', { manga: session.manga, chapters: session.chapters, index: session.index });
+// Nothing to go back to when the host closes the book, so say so plainly.
+function showGuestOver(message) {
+	linked = false;
+	clear(content);
+	content.append(h('div', { class: 'link-screen' },
+		h('div', { class: 'link-logo' }, icon('users', 40)),
+		h('h1', {}, 'Session over'),
+		h('p', { class: 'hint' }, message || 'The host closed the book. Ask them for a new invite to read along again.')
+	));
 }
 
-window.addEventListener('rt-change', renderRtBanner);
-
-// Let in while we were waiting: the approval push only says we're a guest now,
-// so ask again to get the chapter list and open the reader on it.
-window.addEventListener('rt-change', async (e) => {
-	const role = rt.getRole();
-	if (e.detail.declined) toast('The host didn\'t let you in.', 'error');
-	else if (rtWasPending && role === 'guest') {
-		const session = await rt.join().catch(() => null);
-		if (session?.chapters) openSession(session);
-	}
-	rtWasPending = role === 'pending';
+// the host ended it while we were reading
+window.addEventListener('rt-change', () => {
+	if (!isGuest() || !linked) return;
+	if (!rt.getSession()) showGuestOver();
 });
 
 // ---------- linking ----------
@@ -245,6 +202,13 @@ window.addEventListener('remote-unauthorized', () => {
 
 // The code rotates every minute on the PC, so failures need distinct wording:
 // stale scans are normal, lockout means stop and wait.
+function guestErrorText(err) {
+	if (err.message === 'bad-code') return 'That invite has expired or was already used up. Ask for a new one.';
+	if (err.message === 'used-up') return 'That invite has already been used by as many people as it allowed.';
+	if (err.message === 'locked') return 'Too many attempts. Wait a few minutes and try again.';
+	return err.message;
+}
+
 function pairErrorText(err) {
 	if (err.message === 'bad-code') return 'That code didn’t match or has expired. Check Settings on your PC for the current one.';
 	if (err.message === 'locked') return 'Too many attempts. Wait a few minutes, then try the current code.';
@@ -253,20 +217,23 @@ function pairErrorText(err) {
 	return err.message;
 }
 
-// Arriving via a QR code: a pairing code rides in the URL hash. The one QR
-// links at the HOME address; after linking, if internet access is on, the
-// phone is offered a sign-in link for the internet origin, carried there as
-// #token=… — the fragment never leaves the browser, so no token goes on the
-// wire.
+// Arriving via a QR code or link. Three kinds ride in the hash:
+//   #link=…   a pairing code, to link this phone as a device
+//   #token=…  a session handed over to the internet origin after linking
+//   #guest=…  an invite to read along, which links nothing at all
+// The fragment never leaves the browser, so nothing here goes on the wire.
 let pendingCode = null;
 let pendingToken = null;
+let pendingGuest = null;
 function consumeLinkHash() {
 	const params = new URLSearchParams(location.hash.slice(1));
 	const code = params.get('link');
 	const token = params.get('token');
-	if (!code && !token) return false;
+	const guest = params.get('guest');
+	if (!code && !token && !guest) return false;
 	if (code) pendingCode = code.replace(/-/g, '').toUpperCase();
 	if (token) pendingToken = token;
+	if (guest) pendingGuest = guest.replace(/-/g, '').toUpperCase();
 	history.replaceState(null, '', location.pathname);
 	return true;
 }
@@ -319,6 +286,22 @@ function showAwayLink(link) {
 
 async function boot() {
 	consumeLinkHash();
+
+	// An invite wins over everything: it's someone else's phone being handed a
+	// book to read, and it must never turn into a linked device.
+	if (pendingGuest) {
+		const code = pendingGuest;
+		pendingGuest = null;
+		try {
+			await joinAsGuest(code);
+			return openGuestSession();
+		} catch (err) {
+			return showGuestOver(guestErrorText(err));
+		}
+	}
+	// already a guest, just reloading
+	if (isGuest() && getToken()) return openGuestSession();
+
 	// a handed-over session (paired at the home address, delivered here in the
 	// hash) replaces whatever this origin had — we're now on the internet origin,
 	// already linked, so drop straight into the app below

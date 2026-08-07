@@ -1,5 +1,5 @@
 import { h, clear, toast, debounce } from '../util.js';
-import { styledSelect } from '../components.js';
+import { styledSelect, openInviteDialog, confirmEndSession } from '../components.js';
 import { icon } from '../icons.js';
 import * as rt from '../readTogether.js';
 
@@ -48,7 +48,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	const rtPanel = h('div', { class: 'rt-panel hidden' });
 
 	const bar = h('header', { class: 'reader-bar' },
-		h('button', { class: 'btn small', onclick: close }, icon('chevron-left', 14), 'Close'),
+		h('button', { class: 'btn small', onclick: tryClose }, icon('chevron-left', 14), 'Close'),
 		titleEl,
 		chapterSelect.el,
 		h('div', { class: 'r-spacer' }),
@@ -106,8 +106,6 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	//
 	// Under a hard gate this reader refuses to leave the gate chapter early; the
 	// server never moves the gate on its own either, so the two agree.
-	let handingOver = false; // reopening this reader on the session's series
-
 	const pushSync = debounce(() => rt.sync(chIndex, page, pages.length), 300);
 
 	const inSession = () => ['host', 'guest'].includes(rt.getRole());
@@ -147,15 +145,13 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		if (inSession()) {
 			rtBtn.append(icon('users', 14), `Together · ${s.participants.length}`);
 			rtBtn.title = 'Who\'s reading';
-		} else if (role === 'pending') {
-			rtBtn.append(icon('users', 14), 'Asking…');
-			rtBtn.title = 'Waiting for the host to let you in';
 		} else if (s) {
-			rtBtn.append(icon('users', 14), `Join ${s.participants.find((p) => p.host)?.name || 'session'}`);
-			rtBtn.title = `${s.manga.title} — ask to join`;
+			// a session is running on another book — this reader isn't part of it
+			rtBtn.append(icon('users', 14), 'Reading elsewhere');
+			rtBtn.title = `A session is running on ${s.manga.title}`;
 		} else {
 			rtBtn.append(icon('users', 14), 'Read together');
-			rtBtn.title = 'Read this with your other devices';
+			rtBtn.title = 'Invite someone to read this with you';
 		}
 
 		// quick ready toggle, so agreeing to move on doesn't need the panel open
@@ -198,20 +194,18 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 				h('span', { class: 'rt-where' }, pageOf(p)),
 				isMe
 					? h('button', { class: 'btn small icon-only', title: 'Change your name', onclick: promptRename }, icon('pencil', 13))
-					: null
+					: h('button', {
+						class: 'btn small icon-only', title: `Remove ${p.name}`,
+						onclick: () => rt.kick(p.id).catch((e) => toast(e.message, 'error'))
+					}, icon('x', 13))
 			));
 		}
 
-		// people waiting to be let in — only the host can answer
-		if (role === 'host' && s.pending.length) {
-			rtPanel.append(h('div', { class: 'rt-panel-sub' }, 'Asking to join'));
-			for (const req of s.pending) {
-				rtPanel.append(h('div', { class: 'rt-row pending' },
-					h('span', { class: 'rt-name' }, req.name),
-					h('button', { class: 'btn small primary', onclick: () => rt.approve(req.id).catch((e) => toast(e.message, 'error')) }, 'Allow'),
-					h('button', { class: 'btn small', onclick: () => rt.deny(req.id).catch((e) => toast(e.message, 'error')) }, 'Deny')
-				));
-			}
+		if (role === 'host') {
+			rtPanel.append(h('button', {
+				class: 'btn small wide',
+				onclick: () => openInviteDialog()
+			}, icon('plus', 13), 'Invite someone'));
 		}
 
 		if (role === 'host') {
@@ -232,13 +226,14 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		rtPanel.append(h('button', {
 			class: 'btn small wide',
 			onclick: async () => {
+				if (!(await confirmEnd())) return;
 				try {
 					await rt.leave();
-					toast(role === 'host' ? 'Read together ended.' : 'You left the session.');
+					toast('Read together ended.');
 				} catch (err) { toast(err.message, 'error'); }
 				rtPanel.classList.add('hidden');
 			}
-		}, role === 'host' ? 'End session' : 'Leave session'));
+		}, 'End session'));
 	}
 
 	async function promptRename() {
@@ -253,28 +248,28 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		if (mine) rt.setReady(!mine.ready).catch((err) => toast(err.message, 'error'));
 	});
 
+	// Nobody is cut off without being told first — closing the book ends the
+	// session for everyone in it.
+	async function confirmEnd() {
+		const others = (rt.getSession()?.participants || []).filter((p) => p.id !== rt.getMyId());
+		if (rt.getRole() !== 'host' || !others.length) return true;
+		return await confirmEndSession(others.map((p) => p.name)) === 'end';
+	}
+
 	rtBtn.addEventListener('click', async () => {
-		const s = rt.getSession();
-		const role = rt.getRole();
-		if (inSession() || role === 'pending') {
+		if (inSession()) {
 			rtPanel.classList.toggle('hidden');
 			renderPanel();
 			return;
 		}
+		if (rt.getSession()) {
+			toast('A session is already running on another book.');
+			return;
+		}
 		try {
-			if (s) {
-				const joined = await rt.join();
-				if (rt.getRole() === 'pending') { toast('Asked to join — waiting for the host.'); }
-				else if (joined.manga.id !== manga.id) {
-					// already approved and the session is elsewhere: go there
-					handingOver = true;
-					openReader(ctx, joined.manga, joined.chapters, joined.index, 0);
-					return;
-				}
-			} else {
-				await rt.start(manga, chapterList, chIndex, 'soft');
-				toast('Reading together — your other devices can ask to join.', 'success');
-			}
+			await rt.start(manga, chapterList, chIndex, 'soft');
+			toast('Reading together — invite someone from the panel.', 'success');
+			rtPanel.classList.remove('hidden');
 		} catch (err) {
 			toast(err.message, 'error');
 		}
@@ -444,18 +439,23 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 
 	// ---------- keys ----------
 	function onKey(e) {
-		if (e.key === 'Escape') close();
+		if (e.key === 'Escape') tryClose();
 		else if (e.key === 'ArrowRight' || e.key === 'd') turnPage(1);
 		else if (e.key === 'ArrowLeft' || e.key === 'a') turnPage(-1);
 	}
 	window.addEventListener('keydown', onKey);
 
+	// Every way out of the book goes through here, so nobody reading with us
+	// gets dropped without us being asked first.
+	async function tryClose() {
+		if (await confirmEnd()) close();
+	}
+
 	function close() {
 		saveProgress.flush();
 		pushSync.flush();
-		// closing the reader means leaving the session — unless we're only
-		// swapping this reader over to the series the session is on
-		if (!handingOver && rt.getRole()) rt.leave().catch(() => {});
+		// closing the book ends the session for everyone in it
+		if (rt.getRole()) rt.leave().catch(() => {});
 		window.removeEventListener('rt-change', onRtChange);
 		window.removeEventListener('keydown', onKey);
 		clearTimeout(fadeTimer);

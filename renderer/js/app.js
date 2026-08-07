@@ -6,7 +6,7 @@ import * as downloads from './views/downloads.js';
 import * as settings from './views/settings.js';
 import * as updates from './views/updates.js';
 import { openReader } from './views/reader.js';
-import { h, clear, toast } from './util.js';
+import { clear, toast } from './util.js';
 import { icon } from './icons.js';
 import * as rt from './readTogether.js';
 import { closeActiveMenu, confirmQuitWithDownloads, confirmUpdateReady, confirmNewDevice } from './components.js';
@@ -151,87 +151,24 @@ window.api.onRemoteChanged((domain) => {
 	if ((REMOTE_AFFECTS[domain] || []).includes(current?.name)) render(current.scroll);
 });
 
-// someone started reading together — offer to join from wherever we are, since
-// a session is only worth anything while it's running. Once joined (or waved
-// off) the banner goes away; the reader's own controls take over from there.
-const rtBanner = h('div', { class: 'rt-banner hidden' });
-document.body.append(rtBanner);
-let rtDismissed = null; // the one session the user said no to
-let rtWasPending = false; // so we can spot the moment the host lets us in
+// Someone arriving or leaving mid-read. The roster panel has the full picture,
+// but you shouldn't have to have it open to notice that someone is now reading
+// over your shoulder.
+let rtKnown = new Map(); // participant id -> name, as of the last change
 
-function renderRtBanner() {
+// Someone new on the roster gets a toast; someone gone gets one too. Only the
+// host sees these, since a guest has no say over who else is in the room.
+window.addEventListener('rt-change', () => {
 	const s = rt.getSession();
-	const role = rt.getRole();
-	clear(rtBanner);
-
-	// The host answers join requests here rather than only in the reader's
-	// roster panel — a request is no use if it lands behind a closed panel.
-	if (s && role === 'host' && s.pending.length) {
-		const req = s.pending[0];
-		rtBanner.classList.remove('hidden');
-		rtBanner.append(
-			h('div', { class: 'rt-text' },
-				h('div', { class: 'rt-who' }, `${req.name} wants to join`),
-				h('div', { class: 'rt-what' }, s.manga.title)
-			),
-			h('button', { class: 'btn primary small', onclick: () => rt.approve(req.id).catch((e) => toast(e.message, 'error')) }, 'Allow'),
-			h('button', { class: 'btn small', onclick: () => rt.deny(req.id).catch((e) => toast(e.message, 'error')) }, 'Deny')
-		);
-		return;
+	if (!s || rt.getRole() !== 'host') { rtKnown = new Map(); return; }
+	const now = new Map(s.participants.filter((p) => !p.host).map((p) => [p.id, p.name]));
+	for (const [id, name] of now) {
+		if (!rtKnown.has(id)) toast(`${name} is reading with you.`, 'success');
 	}
-
-	if (s && role === 'pending') {
-		rtBanner.classList.remove('hidden');
-		rtBanner.append(h('div', { class: 'rt-text' },
-			h('div', { class: 'rt-who' }, 'Asking to join…'),
-			h('div', { class: 'rt-what' }, `Waiting for the host of ${s.manga.title}`)
-		));
-		return;
+	for (const [id, name] of rtKnown) {
+		if (!now.has(id)) toast(`${name} left the session.`);
 	}
-
-	const offer = Boolean(s) && !role && s.id !== rtDismissed;
-	rtBanner.classList.toggle('hidden', !offer);
-	if (!offer) return;
-	const host = s.participants.find((p) => p.host);
-	// element.append, not the h() helper — a null child would land as "null"
-	if (s.manga.coverUrl) rtBanner.append(h('img', { class: 'rt-cover', src: s.manga.coverUrl, alt: '' }));
-	rtBanner.append(
-		h('div', { class: 'rt-text' },
-			h('div', { class: 'rt-who' }, `${host?.name || 'Someone'} is reading together`),
-			h('div', { class: 'rt-what' }, s.manga.title)
-		),
-		h('button', { class: 'btn primary small', onclick: joinReadTogether }, 'Ask to join'),
-		h('button', {
-			class: 'btn small icon-only',
-			title: 'Not now',
-			onclick: () => { rtDismissed = s.id; renderRtBanner(); }
-		}, icon('x', 14))
-	);
-}
-
-async function joinReadTogether() {
-	try {
-		const session = await rt.join();
-		// approved already (rejoining) — the reply carries the chapter list
-		if (session?.chapters) ctx.openReader(session.manga, session.chapters, session.index, 0);
-	} catch (err) {
-		toast(err.message, 'error');
-	}
-	renderRtBanner();
-}
-
-window.addEventListener('rt-change', renderRtBanner);
-
-// Let in while we were waiting: the approval broadcast only says we're a guest
-// now, so ask again to get the chapter list and open the reader on it.
-window.addEventListener('rt-change', async (e) => {
-	const role = rt.getRole();
-	if (e.detail.declined) toast('The host didn\'t let you in.', 'error');
-	else if (rtWasPending && role === 'guest') {
-		const session = await rt.join().catch(() => null);
-		if (session?.chapters) ctx.openReader(session.manga, session.chapters, session.index, 0);
-	}
-	rtWasPending = role === 'pending';
+	rtKnown = now;
 });
 
 rt.refresh().catch(() => {});

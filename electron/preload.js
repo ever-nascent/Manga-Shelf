@@ -89,6 +89,10 @@ contextBridge.exposeInMainWorld('api', {
 	setReadTogetherChapter: invoke('rt:chapter'),
 	approveReadTogether: invoke('rt:approve'),
 	denyReadTogether: invoke('rt:deny'),
+	inviteToReadTogether: invoke('rt:invite'),
+	getReadTogetherInvites: invoke('rt:invites'),
+	revokeReadTogetherInvite: invoke('rt:revokeInvite'),
+	kickFromReadTogether: invoke('rt:kick'),
 	renameSelf: invoke('device:rename'),
 	onReadTogether: (cb) => {
 		const listener = (_e, evt) => cb(evt);

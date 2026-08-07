@@ -23,7 +23,12 @@ const DEV = process.argv.includes('--dev');
 // apart without the renderer having to prove anything. The name is whatever the
 // user called themselves — it's what everyone else sees on the roster.
 const DESKTOP_ID = 'desktop';
-const desktopActor = () => ({ id: DESKTOP_ID, name: library.getSettings().displayName || 'This PC' });
+const desktopActor = () => ({
+	id: DESKTOP_ID,
+	name: library.getSettings().displayName || 'This PC',
+	kind: 'device',
+	canHost: true // the PC serves the library, so the PC holds the host seat
+});
 
 // mangafile:// serves images from the library folder to the renderer
 protocol.registerSchemesAsPrivileged([
@@ -359,6 +364,30 @@ function registerIpc() {
 		library.setSettings({ remoteAnywhere: Boolean(on) });
 		syncAnywhere().catch(() => {});
 		return remoteInfo(); // shows 'starting' now; pushes follow as the router answers
+	}));
+	// Inviting someone to read along. The QR points at a page that only ever
+	// shows the reader — it hands out no library access at all, so unlike the
+	// device QR it's safe to show someone else.
+	ipcMain.handle('rt:invite', wrap(async (opts) => {
+		const invite = remoteServer.createInvite(opts || {});
+		const link = `${invite.url}/#guest=${invite.code}`;
+		const QRCode = require('qrcode');
+		return {
+			code: invite.code,
+			link,
+			expiresAt: invite.expiresAt,
+			maxUses: invite.maxUses,
+			// true when the link reaches beyond this Wi-Fi, so the UI can say so
+			remote: link.startsWith(remoteServer.awayUrl?.() || ' '),
+			qrDataUrl: await QRCode.toDataURL(link, {
+				margin: 1, width: 480, color: { dark: '#0e1015ff', light: '#ffffffff' }
+			})
+		};
+	}));
+	ipcMain.handle('rt:invites', wrap(() => remoteServer.inviteSummary()));
+	ipcMain.handle('rt:revokeInvite', wrap((code) => {
+		remoteServer.revokeInvite(code);
+		return remoteServer.inviteSummary();
 	}));
 	ipcMain.handle('remote:setApproveDevices', wrap((on) => {
 		library.setSettings({ approveNewDevices: Boolean(on) });
