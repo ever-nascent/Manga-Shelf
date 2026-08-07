@@ -24,7 +24,7 @@ const crypto = require('crypto');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { USER_AGENT, fetchWithTimeout, describeFetchError, IMAGE_TIMEOUT_MS } = require('./util');
+const { USER_AGENT, fetchWithTimeout, describeFetchError, IMAGE_TIMEOUT_MS, isDirectlyReachable } = require('./util');
 const { makePostMap } = require('./api');
 
 const DEFAULT_PORT = 8420;
@@ -134,11 +134,15 @@ function readBody(req, limit = 2 * 1024 * 1024) {
 }
 
 class RemoteServer {
-	constructor({ library, api, downloader, readTogether }) {
+	constructor({ library, api, downloader, readTogether, isExposed }) {
 		this.library = library;
 		this.api = api;
 		this.downloader = downloader;
 		this.readTogether = readTogether;
+		// Whether this PC can be reached from outside without a router forwarding
+		// anything. Injectable so it can be pinned in tests rather than depending
+		// on whatever network the machine running them happens to be on.
+		this.isExposed = isExposed || isDirectlyReachable;
 		this.server = null;
 		this.port = DEFAULT_PORT;
 		this.sseClients = new Map(); // res -> device id, so revoke can drop just that phone
@@ -318,10 +322,11 @@ class RemoteServer {
 
 	// Approval is the user's choice on a private network, but not once the
 	// server is reachable from the internet — there, a code that leaked would
-	// otherwise be enough for anyone, from anywhere.
+	// otherwise be enough for anyone, from anywhere. That's true whether the
+	// user asked for internet access or simply has a PC that sits on it.
 	requiresApproval() {
 		const s = this.library.getSettings();
-		if (s.remoteAnywhere) return true;
+		if (s.remoteAnywhere || this.isExposed()) return true;
 		return s.approveNewDevices !== false;
 	}
 

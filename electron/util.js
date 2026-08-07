@@ -1,6 +1,7 @@
 // Small helpers shared by the API clients and the on-disk stores.
 
 const fs = require('fs');
+const os = require('os');
 
 const USER_AGENT = 'MangaShelf/2.0 (personal desktop reader; github.com/LiterallyLink/Manga-Shelf)';
 
@@ -79,6 +80,31 @@ function isLanAddress(addr) {
 	return false;
 }
 
+// Every IPv4 this machine actually holds, loopback and virtual-internal aside.
+function localIPv4s() {
+	const out = [];
+	for (const list of Object.values(os.networkInterfaces())) {
+		for (const a of list || []) {
+			if (a.family === 'IPv4' && !a.internal) out.push(a.address);
+		}
+	}
+	return out;
+}
+
+// Some PCs sit straight on the internet rather than behind a home router — a
+// modem in bridge mode, or an ISP that hands the machine a public address.
+// Those have no private address at all, and it changes three things: there's no
+// router to ask for a port forward (UPnP can only fail), the address a phone
+// would use is already the internet address, and the server is reachable from
+// outside whether or not the user ever ticked the "from the internet" box.
+//
+// A machine with any private address is treated as behind a router, which is
+// the safe reading for the multi-homed case.
+function isDirectlyReachable() {
+	const addrs = localIPv4s();
+	return addrs.length > 0 && addrs.every((ip) => !isLanAddress(ip));
+}
+
 // Write via temp file + rename so a crash mid-write can't leave a truncated
 // file behind (a corrupt library.json would silently wipe the library).
 function writeFileAtomic(file, data) {
@@ -89,5 +115,6 @@ function writeFileAtomic(file, data) {
 
 module.exports = {
 	USER_AGENT, sleep, makeRateLimiter, fetchImage, writeFileAtomic, isLanAddress,
+	localIPv4s, isDirectlyReachable,
 	fetchWithTimeout, describeFetchError, API_TIMEOUT_MS, IMAGE_TIMEOUT_MS
 };

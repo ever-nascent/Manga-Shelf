@@ -148,6 +148,29 @@ export async function render(root, params, ctx, signal) {
 	const approveHint = h('div', { class: 'hint' }, '');
 	const attemptsLine = h('div', { class: 'hint remote-attempts hidden' }, '');
 
+	// Behind a router, internet access is a thing you switch on. On a PC that's
+	// plugged straight into the internet there's nothing to switch — so the
+	// toggle is replaced by a plain statement of where things stand.
+	const anywhereRow = h('div', {},
+		h('label', { class: 'check-row' }, anywhereToggle, 'Allow Connections From the Internet'),
+		h('div', { class: 'hint remote-anywhere-hint' },
+			'Asks your router to forward the port (UPnP) so your library is reachable from any network. '
+			+ 'Link a phone on your Wi-Fi as usual; when this is on, it then offers an away link that works '
+			+ 'from anywhere. Traffic to the away address is not encrypted, and it stops when this PC or '
+			+ 'MangaShelf is off.')
+	);
+	// "same Wi-Fi" is the usual case but not the only one — a PC wired straight
+	// to the internet has no Wi-Fi to share, and the phone reaches it the same
+	// way anyone else would.
+	const remoteIntro = h('div', { class: 'hint' },
+		'Use MangaShelf from your phone browser: browse, queue downloads to this PC, and read your '
+		+ 'library. Works while the app is open.');
+	const directNote = h('div', { class: 'hint remote-direct hidden' },
+		'This PC is connected straight to the internet rather than through a home router, so the address '
+		+ 'above already works from anywhere — there is nothing to forward. That also means it is reachable '
+		+ 'whenever MangaShelf is open, so linking a new device always asks you first. Traffic is not '
+		+ 'encrypted, so treat the link code like a password.');
+
 	const remotePanel = h('div', { class: 'remote-panel hidden' },
 		qrImg,
 		h('div', { class: 'remote-details' },
@@ -159,9 +182,8 @@ export async function render(root, params, ctx, signal) {
 			h('label', { class: 'check-row' }, approveToggle, 'Ask Before Linking A New Device'),
 			approveHint,
 			attemptsLine,
-			h('label', { class: 'check-row' }, anywhereToggle, 'Allow Connections From the Internet'),
-			h('div', { class: 'hint remote-anywhere-hint' },
-				'Asks your router to forward the port (UPnP) so your library is reachable from any network. Link a phone on your Wi-Fi as usual; when this is on, it then offers an away link that works from anywhere. Traffic to the away address is not encrypted, and it stops when this PC or MangaShelf is off.')
+			anywhereRow,
+			directNote
 		)
 	);
 	const devicesBlock = h('div', { class: 'remote-devices hidden' },
@@ -224,9 +246,18 @@ export async function render(root, params, ctx, signal) {
 		tick();
 		if (info.running) {
 			const aw = info.anywhere;
+			const direct = info.directInternet;
+			// This PC is on the internet itself, so there is no router to ask and
+			// no second address to show — the one address does both jobs.
+			anywhereRow.classList.toggle('hidden', direct);
 			anywhereToggle.checked = aw.enabled;
-			awayRow.classList.toggle('hidden', !aw.enabled);
-			if (aw.enabled) {
+			awayRow.classList.toggle('hidden', !aw.enabled && !direct);
+			if (direct) {
+				awayCode.textContent = aw.url || '';
+				awayCode.classList.remove('hidden');
+				awayStatus.textContent = 'same as Home — this PC is on the internet directly';
+				awayStatus.classList.remove('err');
+			} else if (aw.enabled) {
 				awayCode.textContent = aw.url || '';
 				awayCode.classList.toggle('hidden', !aw.url);
 				awayStatus.textContent =
@@ -235,6 +266,7 @@ export async function render(root, params, ctx, signal) {
 					: aw.error || 'unavailable';
 				awayStatus.classList.toggle('err', aw.status === 'blocked' || aw.status === 'failed');
 			}
+			directNote.classList.toggle('hidden', !direct);
 			qrImg.src = info.qrDataUrl || '';
 			urlCode.textContent = info.url || '';
 			linkCode.textContent = fmtCode(info.pairCode);
@@ -275,8 +307,7 @@ export async function render(root, params, ctx, signal) {
 
 	root.append(h('div', { class: 'settings-block' },
 		h('h3', {}, 'Phone remote'),
-		h('div', { class: 'hint' },
-			'Use MangaShelf from your phone browser: browse, queue downloads to this PC, and read your library. Works while the app is open and both devices are on the same Wi-Fi network.'),
+		remoteIntro,
 		h('label', { class: 'check-row' }, remoteToggle, 'Allow phones to connect'),
 		remotePanel,
 		devicesBlock

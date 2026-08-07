@@ -12,6 +12,7 @@ const exporter = require('./exporter');
 const { checkForUpdates } = require('./updates');
 const appUpdater = require('./appUpdater');
 const { createApi, makePostMap } = require('./api');
+const { isDirectlyReachable } = require('./util');
 const { RemoteServer } = require('./remoteServer');
 const { ReadTogether } = require('./readTogether');
 const { UpnpMapper } = require('./upnp');
@@ -276,6 +277,14 @@ function onDomainChange(domain, source) {
 // take seconds (SSDP discovery), so callers fire-and-forget; every state
 // change pushes fresh info to the renderer via onChange.
 async function syncAnywhere() {
+	// A PC sitting straight on the internet has no router to ask, and asking
+	// only produces a discovery timeout and a misleading "no router answered".
+	// It's already reachable; there is nothing to map.
+	if (isDirectlyReachable()) {
+		await upnp?.unmap().catch(() => {});
+		upnp = null;
+		return;
+	}
 	const want = Boolean(library.getSettings().remoteAnywhere) && remoteServer.isRunning();
 	if (want) {
 		if (!upnp || upnp.port !== remoteServer.port) {
@@ -293,6 +302,9 @@ async function remoteInfo() {
 	const running = remoteServer.isRunning();
 	const pairing = running ? remoteServer.pairingInfo() : null;
 	const connected = remoteServer.connectedDeviceIds();
+	// No router in front of this PC: it's on the internet already, so there's
+	// nothing to forward and the one address it has serves both jobs.
+	const direct = isDirectlyReachable();
 	const anywhereOn = Boolean(s.remoteAnywhere) && running;
 	const info = {
 		enabled: Boolean(s.remoteEnabled),
@@ -311,7 +323,10 @@ async function remoteInfo() {
 		// linking a new device: whether the user is asked, who's asking, and
 		// what's been tried lately
 		approveNewDevices: s.approveNewDevices !== false,
-		approvalForced: Boolean(s.remoteAnywhere), // internet access takes the choice away
+		// Reachable from outside takes the choice away — and a PC on the
+		// internet directly is reachable whether or not the box is ticked.
+		approvalForced: Boolean(s.remoteAnywhere) || direct,
+		directInternet: direct,
 		pendingPairs: running ? remoteServer.pendingPairList() : [],
 		pairAttempts: running ? remoteServer.recentAttempts() : [],
 		displayName: s.displayName || 'This PC',
@@ -319,9 +334,12 @@ async function remoteInfo() {
 			enabled: Boolean(s.remoteAnywhere),
 			// mapper not created or no result yet reads as "starting", since
 			// enabled means an attempt is coming
-			status: !anywhereOn ? 'off' : (!upnp || upnp.status() === 'off' ? 'starting' : upnp.status()),
-			url: anywhereOn ? upnp?.url() || null : null,
-			error: anywhereOn ? upnp?.blocked || upnp?.lastError || null : null
+			status: direct ? 'direct'
+				: !anywhereOn ? 'off'
+					: (!upnp || upnp.status() === 'off' ? 'starting' : upnp.status()),
+			url: direct ? (running ? remoteServer.bestUrl() : null) : (anywhereOn ? upnp?.url() || null : null),
+			// a direct PC has no router to have failed
+			error: direct ? null : (anywhereOn ? upnp?.blocked || upnp?.lastError || null : null)
 		}
 	};
 	if (running && info.pairCode) {
@@ -555,7 +573,10 @@ app.whenReady().then(() => {
 			win.webContents.send('remote:info', await remoteInfo());
 		} catch { /* window mid-teardown */ }
 	};
-	remoteServer.awayUrl = () => upnp?.url() || null;
+	// Where this PC is reachable from outside. Behind a router that means the
+	// UPnP mapping; on a PC that's on the internet directly, its own address
+	// already is that — which is what makes read-together invites work there.
+	remoteServer.awayUrl = () => (isDirectlyReachable() ? remoteServer.bestUrl() : upnp?.url() || null);
 	// A device offering a valid pairing code still has to be let in by hand.
 	// The prompt is raised here rather than left in Settings, because the point
 	// of asking is that you find out even when you're not looking.
