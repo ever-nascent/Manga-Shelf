@@ -29,10 +29,12 @@ function deviceName() {
 	return 'Phone';
 }
 
-// Exchange a pairing code for a session token. Throws 'bad-code' for a wrong
-// or expired code and 'locked' after too many misses, so the link screen can
-// word each case properly.
-export async function pair(code) {
+// Offer a pairing code. Throws 'bad-code' for a wrong or expired code and
+// 'locked' after too many misses, so the link screen can word each case
+// properly. Unless the PC has approval turned off, the code only gets us into a
+// queue: onWaiting fires and we sit on /pairstatus until someone answers, which
+// can come back 'denied' or 'expired'.
+export async function pair(code, onWaiting) {
 	let res;
 	try {
 		res = await fetch('/pair', {
@@ -45,8 +47,35 @@ export async function pair(code) {
 	}
 	const data = await res.json().catch(() => ({}));
 	if (!data.ok) throw new Error(data.error || `HTTP ${res.status}`);
-	setToken(data.token);
-	return data.device;
+	if (!data.pending) {
+		setToken(data.token);
+		return data.device;
+	}
+	onWaiting?.();
+	return waitForApproval(data.requestId, data.expiresInMs);
+}
+
+const POLL_MS = 1500;
+
+async function waitForApproval(requestId, expiresInMs) {
+	const deadline = Date.now() + (expiresInMs || 120_000) + 5_000;
+	while (Date.now() < deadline) {
+		await new Promise((r) => setTimeout(r, POLL_MS));
+		let res;
+		try {
+			res = await fetch(`/pairstatus?id=${encodeURIComponent(requestId)}`);
+		} catch {
+			continue; // a dropped packet shouldn't abandon a request the user may be answering
+		}
+		const data = await res.json().catch(() => ({}));
+		if (data.ok && data.state === 'pending') continue;
+		if (data.ok && data.state === 'approved') {
+			setToken(data.token);
+			return data.device;
+		}
+		throw new Error(data.error || 'denied');
+	}
+	throw new Error('expired');
 }
 
 // Where is this PC reachable from the internet, if anywhere? Authed: only a
@@ -125,6 +154,9 @@ export function connectEvents() {
 	es.addEventListener('queue', (e) => setQueue(JSON.parse(e.data)));
 	es.addEventListener('change', (e) => {
 		window.dispatchEvent(new CustomEvent('remote-change', { detail: JSON.parse(e.data).domain }));
+	});
+	es.addEventListener('rt', (e) => {
+		window.dispatchEvent(new CustomEvent('rt-event', { detail: JSON.parse(e.data) }));
 	});
 	// EventSource reconnects on its own; nothing to do on transient errors
 }

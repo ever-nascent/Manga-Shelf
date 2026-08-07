@@ -6,9 +6,10 @@ import * as downloads from './views/downloads.js';
 import * as settings from './views/settings.js';
 import * as updates from './views/updates.js';
 import { openReader } from './views/reader.js';
-import { clear, toast } from './util.js';
+import { h, clear, toast } from './util.js';
 import { icon } from './icons.js';
-import { closeActiveMenu, confirmQuitWithDownloads, confirmUpdateReady } from './components.js';
+import * as rt from './readTogether.js';
+import { closeActiveMenu, confirmQuitWithDownloads, confirmUpdateReady, confirmNewDevice } from './components.js';
 
 const views = { home, browse, detail, library, downloads, settings, updates };
 const NAV_ICONS = { home: 'home', browse: 'compass', library: 'books', updates: 'bell', downloads: 'download', settings: 'gear' };
@@ -112,6 +113,19 @@ window.api.onQuitConfirm(({ active }) => {
 	answered.then((choice) => window.api.answerQuit(choice));
 });
 
+// A device offered a valid pairing code and is waiting to be let in. Queued so
+// two devices asking at once can't stack dialogs on top of each other.
+let pairPrompt = Promise.resolve();
+window.api.onPairRequest((request) => {
+	pairPrompt = pairPrompt.then(async () => {
+		closeActiveMenu();
+		const answer = await confirmNewDevice(request);
+		await window.api.answerPairRequest(request.requestId, answer === 'allow');
+		toast(answer === 'allow' ? `${request.name} is linked.` : `Turned away ${request.name}.`,
+			answer === 'allow' ? 'success' : 'info');
+	}).catch((err) => console.error('Pair prompt failed:', err));
+});
+
 // new-chapter notifications from the startup check
 const upBadge = document.getElementById('up-badge');
 
@@ -136,6 +150,91 @@ const REMOTE_AFFECTS = {
 window.api.onRemoteChanged((domain) => {
 	if ((REMOTE_AFFECTS[domain] || []).includes(current?.name)) render(current.scroll);
 });
+
+// someone started reading together — offer to join from wherever we are, since
+// a session is only worth anything while it's running. Once joined (or waved
+// off) the banner goes away; the reader's own controls take over from there.
+const rtBanner = h('div', { class: 'rt-banner hidden' });
+document.body.append(rtBanner);
+let rtDismissed = null; // the one session the user said no to
+let rtWasPending = false; // so we can spot the moment the host lets us in
+
+function renderRtBanner() {
+	const s = rt.getSession();
+	const role = rt.getRole();
+	clear(rtBanner);
+
+	// The host answers join requests here rather than only in the reader's
+	// roster panel — a request is no use if it lands behind a closed panel.
+	if (s && role === 'host' && s.pending.length) {
+		const req = s.pending[0];
+		rtBanner.classList.remove('hidden');
+		rtBanner.append(
+			h('div', { class: 'rt-text' },
+				h('div', { class: 'rt-who' }, `${req.name} wants to join`),
+				h('div', { class: 'rt-what' }, s.manga.title)
+			),
+			h('button', { class: 'btn primary small', onclick: () => rt.approve(req.id).catch((e) => toast(e.message, 'error')) }, 'Allow'),
+			h('button', { class: 'btn small', onclick: () => rt.deny(req.id).catch((e) => toast(e.message, 'error')) }, 'Deny')
+		);
+		return;
+	}
+
+	if (s && role === 'pending') {
+		rtBanner.classList.remove('hidden');
+		rtBanner.append(h('div', { class: 'rt-text' },
+			h('div', { class: 'rt-who' }, 'Asking to join…'),
+			h('div', { class: 'rt-what' }, `Waiting for the host of ${s.manga.title}`)
+		));
+		return;
+	}
+
+	const offer = Boolean(s) && !role && s.id !== rtDismissed;
+	rtBanner.classList.toggle('hidden', !offer);
+	if (!offer) return;
+	const host = s.participants.find((p) => p.host);
+	// element.append, not the h() helper — a null child would land as "null"
+	if (s.manga.coverUrl) rtBanner.append(h('img', { class: 'rt-cover', src: s.manga.coverUrl, alt: '' }));
+	rtBanner.append(
+		h('div', { class: 'rt-text' },
+			h('div', { class: 'rt-who' }, `${host?.name || 'Someone'} is reading together`),
+			h('div', { class: 'rt-what' }, s.manga.title)
+		),
+		h('button', { class: 'btn primary small', onclick: joinReadTogether }, 'Ask to join'),
+		h('button', {
+			class: 'btn small icon-only',
+			title: 'Not now',
+			onclick: () => { rtDismissed = s.id; renderRtBanner(); }
+		}, icon('x', 14))
+	);
+}
+
+async function joinReadTogether() {
+	try {
+		const session = await rt.join();
+		// approved already (rejoining) — the reply carries the chapter list
+		if (session?.chapters) ctx.openReader(session.manga, session.chapters, session.index, 0);
+	} catch (err) {
+		toast(err.message, 'error');
+	}
+	renderRtBanner();
+}
+
+window.addEventListener('rt-change', renderRtBanner);
+
+// Let in while we were waiting: the approval broadcast only says we're a guest
+// now, so ask again to get the chapter list and open the reader on it.
+window.addEventListener('rt-change', async (e) => {
+	const role = rt.getRole();
+	if (e.detail.declined) toast('The host didn\'t let you in.', 'error');
+	else if (rtWasPending && role === 'guest') {
+		const session = await rt.join().catch(() => null);
+		if (session?.chapters) ctx.openReader(session.manga, session.chapters, session.index, 0);
+	}
+	rtWasPending = role === 'pending';
+});
+
+rt.refresh().catch(() => {});
 
 // clicking a desktop notification jumps to a view (e.g. Updates)
 window.api.onNavigate((view) => {

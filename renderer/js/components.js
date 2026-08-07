@@ -171,6 +171,33 @@ export function confirmUpdateReady(version) {
 	});
 }
 
+// ---------- a new device wants to link ----------
+
+// Resolves 'allow' | 'deny'. Dismissing means deny — the safe answer, since
+// allowing hands over a key to the whole library. The address is shown because
+// the device's own name is whatever it claims to be; the address isn't.
+export function confirmNewDevice({ name, addr }) {
+	return choiceDialog({
+		title: 'Let this device in?',
+		message: `“${name}” gave the right pairing code, from ${addr || 'an unknown address'}. `
+			+ 'Allow it only if that\'s a device you\'re linking right now — it will be able to read your '
+			+ 'library, queue downloads, and delete chapters.',
+		dismissValue: 'deny',
+		choices: [
+			{
+				value: 'allow', icon: 'check', cls: 'primary',
+				label: 'Allow',
+				hint: 'Link it. You can unlink it again from Settings at any time.'
+			},
+			{
+				value: 'deny', icon: 'x',
+				label: 'Deny',
+				hint: 'Turn it away. If this wasn\'t you, nothing was given out.'
+			}
+		]
+	});
+}
+
 // ---------- quit confirmation (downloads still running) ----------
 
 // Resolves with 'pause' | 'cancel' | 'stay'. Dismissing (Escape, backdrop,

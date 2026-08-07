@@ -8,10 +8,13 @@
 //
 // Routes:
 //   GET  /            mobile app shell (renderer/mobile/)
-//   POST /pair        exchange the current pairing code for a session token
+//   POST /pair        offer the current pairing code; unless approval is off,
+//                     this only queues the device for the user to allow
+//   GET  /pairstatus  collect the answer (and the token, once) for that request
 //   GET  /awayinfo    where this PC is reachable from the internet (authed)
 //   POST /api/<cmd>   run a registry command, body {args:[...]}
-//   GET  /events      SSE stream: live queue snapshots + change pings
+//   GET  /events      SSE stream: live queue snapshots, change pings, and
+//                     read-together position updates
 //   GET  /file?p=     serve a library image (covers/pages), path-checked
 //   GET  /proxy?url=  fetch a cover/page from a manga CDN with the right
 //                     headers (the CDNs reject plain phone-browser requests)
@@ -40,6 +43,16 @@ const PAIR_FAIL_LIMIT = 5;
 const PAIR_FAIL_GLOBAL_LIMIT = 20;
 const PAIR_FAIL_WINDOW_MS = 15 * 60_000;
 const PAIR_LOCK_MS = 5 * 60_000;
+
+// Knowing the code is one factor; saying yes at the PC is the other. It stops a
+// code that leaked — shoulder-surfed, screenshotted, seen on a shared screen —
+// from being worth anything later, and it means an attempt is something you
+// find out about instead of something that happens silently.
+const PAIR_APPROVAL_TTL_MS = 2 * 60_000;
+// How long a decided request sticks around for the phone to collect its answer.
+const PAIR_ANSWER_TTL_MS = 60_000;
+// What the Settings screen reports as "recent"
+const PAIR_ATTEMPT_WINDOW_MS = 60 * 60_000;
 
 const PROXY_HOSTS = /^(uploads\.mangadex\.org|[a-z0-9-]+\.mangadex\.network|i\d+\.mangakatana\.com|mangakatana\.com)$/;
 
@@ -106,10 +119,11 @@ function readBody(req, limit = 2 * 1024 * 1024) {
 }
 
 class RemoteServer {
-	constructor({ library, api, downloader }) {
+	constructor({ library, api, downloader, readTogether }) {
 		this.library = library;
 		this.api = api;
 		this.downloader = downloader;
+		this.readTogether = readTogether;
 		this.server = null;
 		this.port = DEFAULT_PORT;
 		this.sseClients = new Map(); // res -> device id, so revoke can drop just that phone
@@ -120,6 +134,9 @@ class RemoteServer {
 		this.rotateTimer = null;
 		this.pairFailures = new Map(); // remote address -> { count, firstAt, lockedUntil }
 		this.globalFailures = { count: 0, firstAt: 0, lockedUntil: 0 };
+		this.pendingPairs = new Map(); // requestId -> a device waiting to be let in
+		this.pairAttempts = []; // { at, addr, outcome } — what Settings reports
+		this.onPairRequest = null; // main.js: ask the user about a new device
 		this.lastSeenFlushed = new Map(); // device id -> when lastSeenAt last hit disk
 		this.onInfoChanged = null; // main.js: pairing rotated or devices changed
 		this.awayUrl = null; // main.js: () => current internet URL while mapped
@@ -175,6 +192,9 @@ class RemoteServer {
 
 	stop() {
 		if (!this.server) return;
+		// with the server down nobody can join or follow, so a session that
+		// outlived it would just be a stuck banner on the desktop
+		this.readTogether?.end();
 		clearInterval(this.heartbeat);
 		this.heartbeat = null;
 		clearInterval(this.rotateTimer);
@@ -182,6 +202,7 @@ class RemoteServer {
 		this.pairCode = null;
 		this.prevPairCode = null;
 		this.rotatesAt = 0;
+		this.pendingPairs.clear(); // nobody can collect an answer with the server down
 		this.dropClients();
 		this.server.close();
 		this.server = null;
@@ -243,20 +264,128 @@ class RemoteServer {
 		// moments before rotation still links
 		if (!tokenEquals(code, this.pairCode ?? '') && !tokenEquals(code, this.prevPairCode ?? '')) {
 			this.registerPairFailure(addr);
+			this.noteAttempt(addr, 'bad-code');
+			this.onInfoChanged?.();
 			return this.json(res, 401, { ok: false, error: 'bad-code' });
 		}
 		this.pairFailures.delete(addr);
+		const name = sanitizeDeviceName(body.name) || 'Phone';
+
+		// The code alone used to be enough. Unless the user has turned approval
+		// off on a private network, it now only buys a place in the queue.
+		if (this.requiresApproval()) {
+			this.prunePendingPairs();
+			// The request id IS the claim ticket for the token, so it has to be
+			// as unguessable as the token itself.
+			const requestId = crypto.randomBytes(32).toString('base64url');
+			const request = { id: requestId, name, addr, at: Date.now(), state: 'pending' };
+			this.pendingPairs.set(requestId, request);
+			this.noteAttempt(addr, 'asked');
+			this.onPairRequest?.({ requestId, name, addr });
+			this.onInfoChanged?.();
+			return this.json(res, 200, {
+				ok: true,
+				pending: true,
+				requestId,
+				expiresInMs: PAIR_APPROVAL_TTL_MS
+			});
+		}
+
+		this.noteAttempt(addr, 'linked');
+		const { token, device } = this.createDevice(name);
+		this.json(res, 200, { ok: true, token, device: { id: device.id, name: device.name } });
+	}
+
+	// Approval is the user's choice on a private network, but not once the
+	// server is reachable from the internet — there, a code that leaked would
+	// otherwise be enough for anyone, from anywhere.
+	requiresApproval() {
+		const s = this.library.getSettings();
+		if (s.remoteAnywhere) return true;
+		return s.approveNewDevices !== false;
+	}
+
+	createDevice(name) {
 		const token = generateSessionToken();
 		const device = {
 			id: crypto.randomBytes(5).toString('hex'),
-			name: sanitizeDeviceName(body.name) || 'Phone',
+			name,
 			tokenHash: hashToken(token),
 			createdAt: new Date().toISOString(),
 			lastSeenAt: new Date().toISOString()
 		};
 		this.library.setSettings({ remoteDevices: [...this.devices(), device] });
 		this.onInfoChanged?.();
-		this.json(res, 200, { ok: true, token, device: { id: device.id, name: device.name } });
+		return { token, device };
+	}
+
+	// ---------- approving a new device ----------
+
+	// The phone holds only a request id and asks here until it's answered. The
+	// token is handed over exactly once, then the request is dropped.
+	handlePairStatus(req, res, u) {
+		this.prunePendingPairs();
+		const request = this.pendingPairs.get(u.searchParams.get('id') || '');
+		if (!request) return this.json(res, 404, { ok: false, error: 'expired' });
+		if (request.state === 'pending') return this.json(res, 200, { ok: true, state: 'pending' });
+		this.pendingPairs.delete(request.id);
+		if (request.state === 'denied') return this.json(res, 403, { ok: false, error: 'denied' });
+		this.json(res, 200, {
+			ok: true,
+			state: 'approved',
+			token: request.token,
+			device: { id: request.device.id, name: request.device.name }
+		});
+	}
+
+	pendingPairList() {
+		this.prunePendingPairs();
+		return [...this.pendingPairs.values()]
+			.filter((r) => r.state === 'pending')
+			.map((r) => ({ requestId: r.id, name: r.name, addr: r.addr, at: r.at }));
+	}
+
+	approvePair(requestId) {
+		const request = this.pendingPairs.get(requestId);
+		if (!request || request.state !== 'pending') return false;
+		const { token, device } = this.createDevice(request.name);
+		Object.assign(request, { state: 'approved', token, device, decidedAt: Date.now() });
+		this.noteAttempt(request.addr, 'allowed');
+		this.onInfoChanged?.();
+		return true;
+	}
+
+	denyPair(requestId) {
+		const request = this.pendingPairs.get(requestId);
+		if (!request || request.state !== 'pending') return false;
+		Object.assign(request, { state: 'denied', decidedAt: Date.now() });
+		this.noteAttempt(request.addr, 'denied');
+		this.onInfoChanged?.();
+		return true;
+	}
+
+	prunePendingPairs() {
+		const now = Date.now();
+		for (const [id, r] of this.pendingPairs) {
+			const stale = r.state === 'pending'
+				? now - r.at > PAIR_APPROVAL_TTL_MS
+				: now - r.decidedAt > PAIR_ANSWER_TTL_MS;
+			if (stale) this.pendingPairs.delete(id);
+		}
+	}
+
+	// A short history of who tried to link, so a stranger guessing at the code
+	// is something the Settings screen can actually show you.
+	noteAttempt(addr, outcome) {
+		const now = Date.now();
+		this.pairAttempts.push({ at: now, addr, outcome });
+		this.pairAttempts = this.pairAttempts.filter((a) => now - a.at < PAIR_ATTEMPT_WINDOW_MS);
+	}
+
+	recentAttempts() {
+		const now = Date.now();
+		this.pairAttempts = this.pairAttempts.filter((a) => now - a.at < PAIR_ATTEMPT_WINDOW_MS);
+		return this.pairAttempts.slice(-20);
 	}
 
 	// A linked phone asks where this PC is reachable from the internet, so the
@@ -281,12 +410,14 @@ class RemoteServer {
 		for (const [client, deviceId] of this.sseClients) {
 			if (deviceId === id) { client.end(); this.sseClients.delete(client); }
 		}
+		this.readTogether?.dropDevice(id);
 		this.onInfoChanged?.();
 	}
 
 	revokeAll() {
 		this.library.setSettings({ remoteDevices: [] });
 		this.dropClients();
+		this.readTogether?.end();
 		this.onInfoChanged?.();
 	}
 
@@ -328,6 +459,10 @@ class RemoteServer {
 		this.send('change', { domain });
 	}
 
+	broadcastReadTogether(evt) {
+		this.send('rt', evt);
+	}
+
 	send(event, data) {
 		if (!this.sseClients.size) return;
 		const frame = `event: ${event}\ndata: ${JSON.stringify(data)}\n\n`;
@@ -358,6 +493,7 @@ class RemoteServer {
 		res.setHeader('X-Content-Type-Options', 'nosniff');
 
 		if (u.pathname === '/pair') return this.handlePair(req, res);
+		if (u.pathname === '/pairstatus') return this.handlePairStatus(req, res, u);
 		if (u.pathname === '/awayinfo') return this.handleAwayInfo(req, res);
 		if (u.pathname.startsWith('/api/')) return this.handleApi(req, res, u);
 		if (u.pathname === '/events') return this.handleEvents(req, res);
@@ -368,7 +504,8 @@ class RemoteServer {
 
 	async handleApi(req, res, u) {
 		if (req.method !== 'POST') return this.json(res, 405, { ok: false, error: 'POST only' });
-		if (!this.authedDevice(req)) return this.json(res, 401, { ok: false, error: 'unauthorized' });
+		const device = this.authedDevice(req);
+		if (!device) return this.json(res, 401, { ok: false, error: 'unauthorized' });
 
 		const cmd = decodeURIComponent(u.pathname.slice('/api/'.length));
 		if (!this.api.commands[cmd]) return this.json(res, 404, { ok: false, error: `Unknown command: ${cmd}` });
@@ -382,7 +519,9 @@ class RemoteServer {
 		}
 
 		try {
-			let result = await this.api.dispatch(cmd, args, 'remote');
+			// the linked device is the caller's identity — read-together needs to
+			// know which phone is hosting, joining, or turning pages
+			let result = await this.api.dispatch(cmd, args, 'remote', { id: device.id, name: device.name });
 			if (this.postMap[cmd]) result = this.postMap[cmd](result);
 			this.json(res, 200, { ok: true, result: result ?? null });
 		} catch (err) {
@@ -401,10 +540,19 @@ class RemoteServer {
 		res.write('retry: 3000\n\n');
 		// current queue right away so the Downloads view never starts stale
 		res.write(`event: queue\ndata: ${JSON.stringify(this.downloader.snapshot())}\n\n`);
+		// whatever is being read together, so a phone that reconnects mid-session
+		// doesn't sit there thinking nothing is running
+		if (this.readTogether?.active()) {
+			res.write(`event: rt\ndata: ${JSON.stringify({ type: 'started', session: this.readTogether.snapshot() })}\n\n`);
+		}
 		this.sseClients.set(res, device.id);
 		this.onInfoChanged?.(); // the device just went "connected"
 		req.on('close', () => {
 			this.sseClients.delete(res);
+			// A reconnecting phone briefly holds two streams, and the old one can
+			// close after the new one opens — only count the device as gone once
+			// its last stream is down, or a blip would drop it from the session.
+			if (!this.connectedDeviceIds().has(device.id)) this.readTogether?.dropDevice(device.id);
 			this.onInfoChanged?.();
 		});
 	}

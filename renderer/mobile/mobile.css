@@ -400,6 +400,116 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 .r-pages { min-height: 100dvh; }
 .r-page { display: block; width: 100%; min-height: 120px; background: #0b0d13; }
 
+/* ---- read together ---- */
+.r-rt { flex-shrink: 0; }
+.r-rt.active { color: var(--accent); }
+
+.r-ready {
+	position: fixed;
+	left: 10px;
+	bottom: calc(10px + env(safe-area-inset-bottom));
+	z-index: 50;
+	background: rgba(7, 8, 12, .7);
+	border: 1px solid var(--border);
+	border-radius: 12px;
+	padding: 5px 11px;
+	font: inherit;
+	font-size: 11.5px;
+	color: var(--muted);
+}
+.r-ready.active { color: var(--green); border-color: rgba(76, 217, 123, .35); }
+
+/* roster sheet, above the reader bar */
+.rt-panel {
+	position: fixed;
+	z-index: 70;
+	left: 10px;
+	right: 10px;
+	bottom: calc(10px + env(safe-area-inset-bottom));
+	max-height: 65dvh;
+	overflow-y: auto;
+	padding: 14px;
+	background: var(--panel2);
+	border: 1px solid var(--border);
+	border-radius: var(--radius);
+	box-shadow: 0 14px 34px rgba(0, 0, 0, .6);
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
+}
+.rt-panel-title { font-size: 14px; font-weight: 600; }
+.rt-panel-sub { font-size: 11.5px; color: var(--muted); margin-top: 2px; }
+.rt-row {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px 0;
+	font-size: 13.5px;
+}
+.rt-row .rt-dot {
+	width: 8px;
+	height: 8px;
+	border-radius: 50%;
+	background: var(--muted);
+	flex-shrink: 0;
+}
+.rt-row.ready .rt-dot { background: var(--green); }
+.rt-row .rt-name {
+	flex: 1;
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.rt-row .rt-where {
+	font-size: 11.5px;
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+}
+.rt-gate {
+	display: grid;
+	grid-template-columns: auto 1fr;
+	align-items: center;
+	gap: 4px 8px;
+	margin-top: 6px;
+	padding-top: 10px;
+	border-top: 1px solid var(--border);
+	font-size: 13.5px;
+}
+.rt-gate input { accent-color: var(--accent); width: 18px; height: 18px; }
+.rt-gate .rt-gate-hint { grid-column: 2; font-size: 11.5px; color: var(--muted); }
+
+/* above the reader bar (50) so an invite still lands mid-chapter, below toasts (90) */
+.rt-banner {
+	position: fixed;
+	z-index: 80;
+	left: 10px;
+	right: 10px;
+	bottom: calc(var(--nav-h) + 10px + env(safe-area-inset-bottom));
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	background: var(--panel2);
+	border: 1px solid var(--border);
+	border-left: 3px solid var(--accent);
+	border-radius: var(--radius);
+	box-shadow: 0 10px 26px rgba(0, 0, 0, .55);
+}
+/* the tab bar is hidden while reading, so the banner drops down to meet it */
+body.reading .rt-banner { bottom: calc(10px + env(safe-area-inset-bottom)); }
+.rt-banner .rt-text { min-width: 0; flex: 1; }
+.rt-banner .rt-who { font-size: 13px; font-weight: 600; }
+.rt-banner .rt-what {
+	font-size: 12px;
+	color: var(--muted);
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+.rt-banner .icon-btn.small { width: 30px; height: 30px; flex-shrink: 0; }
+
 .r-ind {
 	position: fixed;
 	right: 10px;

@@ -16,7 +16,8 @@ const PATHS = {
 	bookmark: '<path d="M6.8 4.5h10.4v15.4l-5.2-3.5-5.2 3.5z"/>',
 	trash: '<path d="M4.5 7h15"/><path d="M9.3 7V5.4c0-.7.6-1.3 1.3-1.3h2.8c.7 0 1.3.6 1.3 1.3V7"/><path d="M6.7 7l.9 12.5h8.8L17.3 7"/><path d="M10.1 10.7v5.4M13.9 10.7v5.4"/>',
 	alert: '<circle cx="12" cy="12" r="8.5"/><path d="M12 7.8v5"/><circle cx="12" cy="16.2" r="0.4" fill="currentColor" stroke-width="1.6"/>',
-	phone: '<rect x="7" y="3.5" width="10" height="17" rx="2"/><path d="M10.5 18h3"/>'
+	phone: '<rect x="7" y="3.5" width="10" height="17" rx="2"/><path d="M10.5 18h3"/>',
+	users: '<circle cx="9.2" cy="8.6" r="3.4"/><path d="M3.4 19.6c0-3.1 2.6-5 5.8-5s5.8 1.9 5.8 5"/><path d="M16.2 5.6a3.4 3.4 0 0 1 0 6"/><path d="M17.9 14.9c1.8.7 2.9 2.2 2.9 4.7"/>'
 };
 
 export function icon(name, size = 20) {

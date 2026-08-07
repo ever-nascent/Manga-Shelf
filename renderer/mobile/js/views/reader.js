@@ -2,9 +2,10 @@
 // anything else streams from the source through the PC. Progress saves back
 // to the PC so the desktop app resumes exactly where the phone left off.
 
-import { h, clear, spinner, errorBox, chapterName, debounce } from '../util.js';
+import { h, clear, spinner, errorBox, chapterName, debounce, toast } from '../util.js';
 import { rpc, img } from '../api.js';
 import { icon } from '../icons.js';
+import * as rt from '../readTogether.js';
 
 // Auto-scroll speeds in px/second; remembered across chapters within a session.
 const AUTO_SPEEDS = [30, 55, 90, 140, 210, 300];
@@ -15,6 +16,9 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	let current = 0;
 
 	const pageInd = h('div', { class: 'r-ind' }, '');
+	const rtBtn = h('button', { class: 'icon-btn r-rt', 'aria-label': 'Read together' }, icon('users', 21));
+	const rtChip = h('button', { class: 'r-ready hidden' }, '');
+	const rtPanel = h('div', { class: 'rt-panel hidden' });
 
 	// auto-scroller: play/pause plus a slower/faster stepper, all in the top bar
 	const autoBtn = h('button', { class: 'icon-btn', 'aria-label': 'Auto-scroll' }, icon('play', 22));
@@ -28,10 +32,11 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 			h('div', { class: 'r-manga' }, manga.title),
 			h('div', { class: 'r-ch' }, chapterName(ch))
 		),
+		rtBtn,
 		h('div', { class: 'r-auto' }, slowBtn, speedLabel, autoBtn, fastBtn)
 	);
 	const pagesEl = h('div', { class: 'r-pages' }, spinner());
-	root.append(bar, pagesEl, pageInd);
+	root.append(bar, pagesEl, pageInd, rtChip, rtPanel);
 
 	// ----- auto-scroll engine -----
 	let scrolling = false;
@@ -109,6 +114,179 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	}, 800);
 	signal.addEventListener('abort', () => saveProgress.flush(), { once: true });
 
+	// ----- read together -----
+	// Everyone reads at their own pace; nobody's page drives anyone else's. What
+	// the group shares is the *gate* — the chapter it's on. Reaching the end of
+	// that chapter marks you ready, and once the last person is ready the gate
+	// moves and everyone still on the old chapter comes along.
+	//
+	// Leaving the session happens in the router — turning to the next chapter
+	// re-renders this view, and that mustn't read as walking out.
+	let imgs = [];
+
+	const pushSync = debounce(() => rt.sync(index, current, imgs.length), 300);
+
+	const inSession = () => ['host', 'guest'].includes(rt.getRole());
+	const hereNow = () => rt.getSession()?.manga.id === manga.id;
+	const allReady = () => !(rt.getSession()?.waitingOn.length);
+
+	// A hard gate holds everyone on the gate chapter until they're all done.
+	// Being past it already doesn't count — that reader is through.
+	function gateHolds() {
+		const s = rt.getSession();
+		return Boolean(s) && s.gate === 'hard' && inSession() && hereNow()
+			&& index <= s.index && !allReady();
+	}
+
+	function tryChapterChange(run) {
+		if (!gateHolds()) { run(); return; }
+		toast(`Waiting for ${rt.getSession().waitingOn.join(' and ')} to finish this chapter.`);
+	}
+
+	function pageOf(p) {
+		if (p.index !== index) {
+			const c = chapters[p.index];
+			return c?.num ? `Ch. ${c.num}` : `Ch. ${p.index + 1}`;
+		}
+		return p.pages ? `p. ${p.page + 1}/${p.pages}` : '—';
+	}
+
+	function renderRt() {
+		const s = rt.getSession();
+		const role = rt.getRole();
+
+		rtBtn.classList.toggle('active', Boolean(role));
+		rtBtn.setAttribute('aria-label', inSession() ? 'Who\'s reading'
+			: role === 'pending' ? 'Waiting to be let in'
+				: s ? 'Ask to join' : 'Read together');
+
+		const mine = rt.me();
+		const show = inSession() && hereNow() && mine;
+		rtChip.classList.toggle('hidden', !show);
+		if (show) {
+			rtChip.textContent = mine.ready
+				? (allReady() ? 'Everyone ready' : `Ready · waiting for ${s.waitingOn.length}`)
+				: 'Not ready';
+			rtChip.classList.toggle('active', mine.ready);
+		}
+		renderPanel();
+	}
+
+	function renderPanel() {
+		const s = rt.getSession();
+		if (rtPanel.classList.contains('hidden')) return;
+		if (!s) { rtPanel.classList.add('hidden'); return; }
+		const role = rt.getRole();
+		clear(rtPanel);
+
+		const gateCh = chapters[s.index];
+		rtPanel.append(h('div', { class: 'rt-panel-head' },
+			h('div', { class: 'rt-panel-title' }, 'Reading together'),
+			h('div', { class: 'rt-panel-sub' },
+				`Group is on ${gateCh?.num ? `Ch. ${gateCh.num}` : `Ch. ${s.index + 1}`}`)
+		));
+
+		for (const p of s.participants) {
+			const isMe = p.id === rt.getMyId();
+			rtPanel.append(h('div', { class: `rt-row${p.ready ? ' ready' : ''}` },
+				h('span', { class: 'rt-dot' }),
+				h('span', { class: 'rt-name' }, p.name, isMe ? ' (you)' : '', p.host ? ' · host' : ''),
+				h('span', { class: 'rt-where' }, pageOf(p)),
+				isMe ? h('button', { class: 'btn small', onclick: promptRename }, 'Rename') : null
+			));
+		}
+
+		if (role === 'host' && s.pending.length) {
+			rtPanel.append(h('div', { class: 'rt-panel-sub' }, 'Asking to join'));
+			for (const req of s.pending) {
+				rtPanel.append(h('div', { class: 'rt-row pending' },
+					h('span', { class: 'rt-name' }, req.name),
+					h('button', { class: 'btn small primary', onclick: () => rt.approve(req.id).catch((e) => toast(e.message, 'error')) }, 'Allow'),
+					h('button', { class: 'btn small', onclick: () => rt.deny(req.id).catch((e) => toast(e.message, 'error')) }, 'Deny')
+				));
+			}
+		}
+
+		if (role === 'host') {
+			const hard = s.gate === 'hard';
+			rtPanel.append(h('label', { class: 'rt-gate' },
+				h('input', {
+					type: 'checkbox',
+					checked: hard,
+					onchange: (e) => rt.setGate(e.target.checked ? 'hard' : 'soft').catch((err) => toast(err.message, 'error'))
+				}),
+				h('span', {}, 'Wait for everyone'),
+				h('span', { class: 'rt-gate-hint' }, hard
+					? 'Nobody can move on until all are ready'
+					: 'Anyone may read ahead on their own')
+			));
+		}
+
+		rtPanel.append(h('button', {
+			class: 'btn wide',
+			onclick: async () => {
+				try {
+					await rt.leave();
+					toast(role === 'host' ? 'Read together ended.' : 'You left the session.');
+				} catch (err) { toast(err.message, 'error'); }
+				rtPanel.classList.add('hidden');
+			}
+		}, role === 'host' ? 'End session' : 'Leave session'));
+	}
+
+	async function promptRename() {
+		const current = rt.me()?.name || '';
+		const next = window.prompt('Show up as:', current);
+		if (next === null || next.trim() === current) return;
+		try { await rt.rename(next.trim()); } catch (err) { toast(err.message, 'error'); }
+	}
+
+	rtChip.addEventListener('click', () => {
+		const mine = rt.me();
+		if (mine) rt.setReady(!mine.ready).catch((err) => toast(err.message, 'error'));
+	});
+
+	rtBtn.addEventListener('click', async () => {
+		const s = rt.getSession();
+		if (inSession() || rt.getRole() === 'pending') {
+			rtPanel.classList.toggle('hidden');
+			renderPanel();
+			return;
+		}
+		try {
+			if (s) {
+				const joined = await rt.join();
+				if (rt.getRole() === 'pending') toast('Asked to join — waiting for the host.');
+				else if (joined.manga.id !== manga.id) {
+					ctx.navigate('reader', {
+						manga: joined.manga, chapters: joined.chapters, index: joined.index
+					}, { replace: true });
+					return;
+				}
+			} else {
+				await rt.start(manga, chapters, index, 'soft');
+				toast('Reading together — your other devices can ask to join.', 'success');
+			}
+		} catch (err) {
+			toast(err.message, 'error');
+		}
+		renderRt();
+	});
+
+	// The gate moved: anyone still on the old chapter comes along.
+	function followGate() {
+		const s = rt.getSession();
+		if (!s || !inSession() || !hereNow()) return;
+		if (index < s.index) ctx.navigate('reader', { manga, chapters, index: s.index }, { replace: true });
+	}
+
+	window.addEventListener('rt-change', (e) => {
+		if (e.detail.declined) toast('The host didn\'t let you in.', 'error');
+		renderRt();
+		followGate();
+	}, { signal });
+	renderRt();
+
 	let pages = [];
 	try {
 		pages = await rpc('lib:pages', manga.id, ch.id).catch(() => []);
@@ -124,7 +302,7 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	if (signal.aborted) return;
 
 	clear(pagesEl);
-	const imgs = pages.map((p, i) => h('img', {
+	imgs = pages.map((p, i) => h('img', {
 		class: 'r-page',
 		src: p.startsWith('http') ? img(p) : p,
 		loading: i < 3 ? 'eager' : 'lazy',
@@ -134,7 +312,8 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 
 	// end-of-chapter controls
 	const next = chapters[index + 1];
-	const openNext = (auto) => ctx.navigate('reader', { manga, chapters, index: index + 1, autoScroll: auto }, { replace: true });
+	const openNext = (auto) => tryChapterChange(() =>
+		ctx.navigate('reader', { manga, chapters, index: index + 1, autoScroll: auto }, { replace: true }));
 	pagesEl.append(h('div', { class: 'r-end' },
 		h('div', { class: 'r-end-label' }, `End of ${chapterName(ch)}`),
 		next && h('button', {
@@ -165,6 +344,9 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 		if (idx !== current) {
 			current = idx;
 			saveProgress();
+			// reaching the last page is what marks this reader ready, so the
+			// gate depends on this going out
+			if (inSession()) pushSync();
 		}
 		pageInd.textContent = `${current + 1} / ${imgs.length}`;
 	};
@@ -178,6 +360,12 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	current = Math.min(page, imgs.length - 1);
 	pageInd.textContent = `${current + 1} / ${imgs.length}`;
 	saveProgress(); // opening a chapter marks it as being read
+	// tell the group where this chapter left us — landing on a new one changes
+	// whether we're done with the gate chapter
+	rt.sync(index, current, imgs.length);
+	renderRt();
+	// and if the gate moved while this chapter was loading, catch up now
+	followGate();
 
 	// arrived here from the previous chapter's auto-scroll: keep scrolling
 	if (autoScroll) startAuto();

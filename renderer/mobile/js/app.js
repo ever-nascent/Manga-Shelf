@@ -2,8 +2,9 @@
 // browser history API so the phone's back button works naturally.
 
 import { getToken, setToken, clearToken, pair, rpc, connectEvents, setQueue, sinceLastMutation, awayInfo } from './api.js';
-import { h, clear } from './util.js';
+import { h, clear, toast } from './util.js';
 import { icon } from './icons.js';
+import * as rt from './readTogether.js';
 import * as home from './views/home.js';
 import * as search from './views/search.js';
 import * as library from './views/library.js';
@@ -36,6 +37,12 @@ const ctx = {
 };
 
 async function render(state) {
+	// Closing the reader means leaving the session. Turning to the next chapter
+	// re-renders the reader too, and that mustn't count — so this lives here,
+	// where both sides of the move are visible, rather than in the view.
+	if (current?.name === 'reader' && state.name !== 'reader' && rt.getRole()) {
+		rt.leave().catch(() => {});
+	}
 	viewAbort?.abort();
 	viewAbort = new AbortController();
 	current = state;
@@ -83,6 +90,93 @@ window.addEventListener('remote-change', (e) => {
 	if ((AFFECTS[e.detail] || []).includes(current.name)) render(current);
 });
 
+// ---------- read together ----------
+
+// Someone started a session — offer to join from wherever we are, since it's
+// only worth anything while it's running. Once joined (or waved off) the banner
+// goes away and the reader's own controls take over.
+const rtBanner = h('div', { class: 'rt-banner hidden' });
+document.body.append(rtBanner);
+let rtDismissed = null; // the one session the user said no to
+let rtWasPending = false; // so we can spot the moment the host lets us in
+
+function renderRtBanner() {
+	const s = rt.getSession();
+	const role = rt.getRole();
+	clear(rtBanner);
+
+	// The host answers join requests here rather than only in the reader's
+	// roster panel — a request is no use if it lands behind a closed panel.
+	if (s && role === 'host' && s.pending.length) {
+		const req = s.pending[0];
+		rtBanner.classList.remove('hidden');
+		rtBanner.append(
+			h('div', { class: 'rt-text' },
+				h('div', { class: 'rt-who' }, `${req.name} wants to join`),
+				h('div', { class: 'rt-what' }, s.manga.title)
+			),
+			h('button', { class: 'btn primary small', onclick: () => rt.approve(req.id).catch((e) => toast(e.message, 'error')) }, 'Allow'),
+			h('button', { class: 'btn small', onclick: () => rt.deny(req.id).catch((e) => toast(e.message, 'error')) }, 'Deny')
+		);
+		return;
+	}
+
+	if (s && role === 'pending') {
+		rtBanner.classList.remove('hidden');
+		rtBanner.append(h('div', { class: 'rt-text' },
+			h('div', { class: 'rt-who' }, 'Asking to join…'),
+			h('div', { class: 'rt-what' }, `Waiting for the host of ${s.manga.title}`)
+		));
+		return;
+	}
+
+	const offer = Boolean(s) && !role && s.id !== rtDismissed;
+	rtBanner.classList.toggle('hidden', !offer);
+	if (!offer) return;
+	const host = s.participants.find((p) => p.host);
+	rtBanner.append(
+		h('div', { class: 'rt-text' },
+			h('div', { class: 'rt-who' }, `${host?.name || 'Someone'} is reading together`),
+			h('div', { class: 'rt-what' }, s.manga.title)
+		),
+		h('button', { class: 'btn primary small', onclick: joinReadTogether }, 'Ask to join'),
+		h('button', {
+			class: 'icon-btn small',
+			'aria-label': 'Not now',
+			onclick: () => { rtDismissed = s.id; renderRtBanner(); }
+		}, icon('x', 18))
+	);
+}
+
+async function joinReadTogether() {
+	try {
+		const session = await rt.join();
+		// approved already (rejoining) — the reply carries the chapter list
+		if (session?.chapters) openSession(session);
+	} catch (err) {
+		toast(err.message, 'error');
+	}
+	renderRtBanner();
+}
+
+function openSession(session) {
+	navigate('reader', { manga: session.manga, chapters: session.chapters, index: session.index });
+}
+
+window.addEventListener('rt-change', renderRtBanner);
+
+// Let in while we were waiting: the approval push only says we're a guest now,
+// so ask again to get the chapter list and open the reader on it.
+window.addEventListener('rt-change', async (e) => {
+	const role = rt.getRole();
+	if (e.detail.declined) toast('The host didn\'t let you in.', 'error');
+	else if (rtWasPending && role === 'guest') {
+		const session = await rt.join().catch(() => null);
+		if (session?.chapters) openSession(session);
+	}
+	rtWasPending = role === 'pending';
+});
+
 // ---------- linking ----------
 
 function showLink(message = '') {
@@ -109,11 +203,13 @@ function showLink(message = '') {
 			return;
 		}
 		status.textContent = 'Linking…';
+		input.disabled = true;
 		try {
-			await pair(code);
+			await pair(code, () => { status.textContent = 'Waiting for someone to allow this device on your PC…'; });
 			startApp();
 		} catch (err) {
 			status.textContent = pairErrorText(err);
+			input.disabled = false;
 		}
 	}
 
@@ -133,6 +229,9 @@ function startApp() {
 	document.body.classList.remove('linking');
 	connectEvents();
 	rpc('dl:queue').then(setQueue).catch(() => {});
+	// confirms this phone's identity in any running session, which is what the
+	// banner and the reader's controls key off
+	rt.refresh().catch(() => {});
 	navigate('home', {}, { replace: true });
 }
 
@@ -140,6 +239,7 @@ function startApp() {
 window.addEventListener('remote-unauthorized', () => {
 	if (!linked) return;
 	clearToken();
+	rt.reset(); // relinking gets a different device id, so our old place is gone
 	showLink('This phone was unlinked. Scan the QR code on your PC to link again.');
 });
 
@@ -148,6 +248,8 @@ window.addEventListener('remote-unauthorized', () => {
 function pairErrorText(err) {
 	if (err.message === 'bad-code') return 'That code didn’t match or has expired. Check Settings on your PC for the current one.';
 	if (err.message === 'locked') return 'Too many attempts. Wait a few minutes, then try the current code.';
+	if (err.message === 'denied') return 'Your PC turned this device away.';
+	if (err.message === 'expired') return 'Nobody answered on your PC. Try again when you’re next to it.';
 	return err.message;
 }
 
@@ -242,7 +344,7 @@ async function boot() {
 		const code = pendingCode;
 		pendingCode = null;
 		try {
-			await pair(code);
+			await pair(code, () => showLink('Waiting for someone to allow this device on your PC…'));
 			return goSetUpAway(); // offers away setup when internet is on, else starts
 		} catch (err) {
 			return showLink(pairErrorText(err));

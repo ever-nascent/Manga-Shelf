@@ -141,6 +141,13 @@ export async function render(root, params, ctx, signal) {
 		}
 	});
 
+	const approveToggle = h('input', {
+		type: 'checkbox',
+		onchange: async (e) => applyRemote(await window.api.setApproveNewDevices(e.target.checked))
+	});
+	const approveHint = h('div', { class: 'hint' }, '');
+	const attemptsLine = h('div', { class: 'hint remote-attempts hidden' }, '');
+
 	const remotePanel = h('div', { class: 'remote-panel hidden' },
 		qrImg,
 		h('div', { class: 'remote-details' },
@@ -149,6 +156,9 @@ export async function render(root, params, ctx, signal) {
 			homeRow,
 			awayRow,
 			h('div', { class: 'settings-row' }, h('span', { class: 'remote-label' }, 'Link Code'), linkCode, codeTimer),
+			h('label', { class: 'check-row' }, approveToggle, 'Ask Before Linking A New Device'),
+			approveHint,
+			attemptsLine,
 			h('label', { class: 'check-row' }, anywhereToggle, 'Allow Connections From the Internet'),
 			h('div', { class: 'hint remote-anywhere-hint' },
 				'Asks your router to forward the port (UPnP) so your library is reachable from any network. Link a phone on your Wi-Fi as usual; when this is on, it then offers an away link that works from anywhere. Traffic to the away address is not encrypted, and it stops when this PC or MangaShelf is off.')
@@ -228,6 +238,24 @@ export async function render(root, params, ctx, signal) {
 			qrImg.src = info.qrDataUrl || '';
 			urlCode.textContent = info.url || '';
 			linkCode.textContent = fmtCode(info.pairCode);
+
+			// Internet access takes the choice away: out there the code is the
+			// only thing standing between a stranger and your library, and a code
+			// can leak. On your own Wi-Fi it stays your call.
+			approveToggle.checked = info.approveNewDevices || info.approvalForced;
+			approveToggle.disabled = info.approvalForced;
+			approveHint.textContent = info.approvalForced
+				? 'Always on while internet access is allowed — a pairing code on its own is never enough from out there.'
+				: 'A device with the right code still has to be allowed here before it gets in. Turning this off means the code alone links it, with nothing shown to you.';
+
+			// A stranger guessing at the code should be something you can see.
+			const misses = info.pairAttempts.filter((a) => a.outcome === 'bad-code').length;
+			const turned = info.pairAttempts.filter((a) => a.outcome === 'denied').length;
+			const parts = [];
+			if (misses) parts.push(`${misses} wrong code${misses === 1 ? '' : 's'}`);
+			if (turned) parts.push(`${turned} turned away`);
+			attemptsLine.textContent = parts.length ? `Last hour: ${parts.join(', ')}.` : '';
+			attemptsLine.classList.toggle('hidden', !parts.length);
 		}
 		renderDevices(info);
 	};

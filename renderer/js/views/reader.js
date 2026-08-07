@@ -1,6 +1,7 @@
 import { h, clear, toast, debounce } from '../util.js';
 import { styledSelect } from '../components.js';
 import { icon } from '../icons.js';
+import * as rt from '../readTogether.js';
 
 const readerEl = document.getElementById('reader');
 
@@ -34,7 +35,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 			value: i,
 			label: c.num ? `Chapter ${c.num}` : (c.title || 'Oneshot')
 		})),
-		onChange: (i) => loadChapter(i, 0)
+		onChange: (i) => tryChapterChange(() => loadChapter(i, 0))
 	});
 	const modeBtn = h('button', { class: 'btn small' });
 	const fitBtn = h('button', { class: 'btn small' });
@@ -42,19 +43,22 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	const widenBtn = h('button', { class: 'btn small icon-only', title: 'Wider' }, icon('plus', 14));
 	const pageInd = h('span', { class: 'page-ind' });
 	const titleEl = h('div', { class: 'r-title' }, manga.title);
+	const rtBtn = h('button', { class: 'btn small rt-btn' });
+	const rtReadyBtn = h('button', { class: 'btn small rt-ready hidden' });
+	const rtPanel = h('div', { class: 'rt-panel hidden' });
 
 	const bar = h('header', { class: 'reader-bar' },
 		h('button', { class: 'btn small', onclick: close }, icon('chevron-left', 14), 'Close'),
 		titleEl,
 		chapterSelect.el,
 		h('div', { class: 'r-spacer' }),
-		narrowBtn, widenBtn, fitBtn, modeBtn, pageInd
+		rtReadyBtn, rtBtn, narrowBtn, widenBtn, fitBtn, modeBtn, pageInd
 	);
 
 	const scroll = h('div', { class: 'reader-scroll' });
 	const zoneL = h('div', { class: 'edge-zone left', onclick: () => turnPage(-1) });
 	const zoneR = h('div', { class: 'edge-zone right', onclick: () => turnPage(1) });
-	readerEl.append(bar, scroll);
+	readerEl.append(bar, scroll, rtPanel);
 
 	// ---------- bar auto-hide ----------
 	let fadeTimer;
@@ -94,9 +98,210 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		window.api.setReading(snapshot, { chapterId: ch.id, chapterNum: ch.num, page });
 	}, 600);
 
+	// ---------- read together ----------
+	// Everyone reads at their own pace; nobody's page drives anyone else's. What
+	// the group shares is the *gate* — the chapter it's on. Reaching the end of
+	// that chapter marks you ready, and once the last person is ready the gate
+	// moves and everyone still sitting on the old chapter comes along.
+	//
+	// Under a hard gate this reader refuses to leave the gate chapter early; the
+	// server never moves the gate on its own either, so the two agree.
+	let handingOver = false; // reopening this reader on the session's series
+
+	const pushSync = debounce(() => rt.sync(chIndex, page, pages.length), 300);
+
+	const inSession = () => ['host', 'guest'].includes(rt.getRole());
+	const hereNow = () => rt.getSession()?.manga.id === manga.id;
+	const allReady = () => !(rt.getSession()?.waitingOn.length);
+
+	// A hard gate holds everyone on the gate chapter until they're all done.
+	// Being ahead of it already (from before the host switched modes) doesn't
+	// count — that reader is past the gate and free to carry on.
+	function gateHolds() {
+		const s = rt.getSession();
+		return Boolean(s) && s.gate === 'hard' && inSession() && hereNow()
+			&& chIndex <= s.index && !allReady();
+	}
+
+	// every hand-driven chapter change goes through here
+	function tryChapterChange(run) {
+		if (!gateHolds()) { run(); return; }
+		const waiting = rt.getSession().waitingOn;
+		toast(`Waiting for ${waiting.join(' and ')} to finish this chapter.`);
+	}
+
+	function pageOf(p) {
+		if (p.index !== chIndex) {
+			const ch = chapterList[p.index];
+			return ch?.num ? `Ch. ${ch.num}` : `Ch. ${p.index + 1}`;
+		}
+		return p.pages ? `p. ${p.page + 1}/${p.pages}` : '—';
+	}
+
+	function renderRt() {
+		const s = rt.getSession();
+		const role = rt.getRole();
+
+		clear(rtBtn);
+		rtBtn.classList.toggle('active', Boolean(role));
+		if (inSession()) {
+			rtBtn.append(icon('users', 14), `Together · ${s.participants.length}`);
+			rtBtn.title = 'Who\'s reading';
+		} else if (role === 'pending') {
+			rtBtn.append(icon('users', 14), 'Asking…');
+			rtBtn.title = 'Waiting for the host to let you in';
+		} else if (s) {
+			rtBtn.append(icon('users', 14), `Join ${s.participants.find((p) => p.host)?.name || 'session'}`);
+			rtBtn.title = `${s.manga.title} — ask to join`;
+		} else {
+			rtBtn.append(icon('users', 14), 'Read together');
+			rtBtn.title = 'Read this with your other devices';
+		}
+
+		// quick ready toggle, so agreeing to move on doesn't need the panel open
+		const mine = rt.me();
+		const showReady = inSession() && hereNow() && mine;
+		rtReadyBtn.classList.toggle('hidden', !showReady);
+		if (showReady) {
+			clear(rtReadyBtn);
+			// element.append, not the h() helper — a null child would land as "null"
+			if (mine.ready) rtReadyBtn.append(icon('check', 14));
+			rtReadyBtn.append(mine.ready ? 'Ready' : 'Not ready');
+			rtReadyBtn.classList.toggle('active', mine.ready);
+			rtReadyBtn.title = allReady()
+				? 'Everyone is ready'
+				: `Waiting for ${s.waitingOn.join(' and ')}`;
+		}
+		renderPanel();
+	}
+
+	// ---------- the roster panel ----------
+	function renderPanel() {
+		const s = rt.getSession();
+		if (rtPanel.classList.contains('hidden')) return;
+		if (!s) { rtPanel.classList.add('hidden'); return; }
+		const role = rt.getRole();
+		clear(rtPanel);
+
+		const gateCh = chapterList[s.index];
+		rtPanel.append(h('div', { class: 'rt-panel-head' },
+			h('div', { class: 'rt-panel-title' }, 'Reading together'),
+			h('div', { class: 'rt-panel-sub' },
+				`Group is on ${gateCh?.num ? `Ch. ${gateCh.num}` : `Ch. ${s.index + 1}`}`)
+		));
+
+		for (const p of s.participants) {
+			const isMe = p.id === rt.getMyId();
+			rtPanel.append(h('div', { class: `rt-row${p.ready ? ' ready' : ''}` },
+				h('span', { class: 'rt-dot' }),
+				h('span', { class: 'rt-name' }, p.name, isMe ? ' (you)' : '', p.host ? ' · host' : ''),
+				h('span', { class: 'rt-where' }, pageOf(p)),
+				isMe
+					? h('button', { class: 'btn small icon-only', title: 'Change your name', onclick: promptRename }, icon('pencil', 13))
+					: null
+			));
+		}
+
+		// people waiting to be let in — only the host can answer
+		if (role === 'host' && s.pending.length) {
+			rtPanel.append(h('div', { class: 'rt-panel-sub' }, 'Asking to join'));
+			for (const req of s.pending) {
+				rtPanel.append(h('div', { class: 'rt-row pending' },
+					h('span', { class: 'rt-name' }, req.name),
+					h('button', { class: 'btn small primary', onclick: () => rt.approve(req.id).catch((e) => toast(e.message, 'error')) }, 'Allow'),
+					h('button', { class: 'btn small', onclick: () => rt.deny(req.id).catch((e) => toast(e.message, 'error')) }, 'Deny')
+				));
+			}
+		}
+
+		if (role === 'host') {
+			const hard = s.gate === 'hard';
+			rtPanel.append(h('label', { class: 'rt-gate' },
+				h('input', {
+					type: 'checkbox',
+					checked: hard,
+					onchange: (e) => rt.setGate(e.target.checked ? 'hard' : 'soft').catch((err) => toast(err.message, 'error'))
+				}),
+				h('span', {}, 'Wait for everyone'),
+				h('span', { class: 'rt-gate-hint' }, hard
+					? 'Nobody can move on until all are ready'
+					: 'Anyone may read ahead on their own')
+			));
+		}
+
+		rtPanel.append(h('button', {
+			class: 'btn small wide',
+			onclick: async () => {
+				try {
+					await rt.leave();
+					toast(role === 'host' ? 'Read together ended.' : 'You left the session.');
+				} catch (err) { toast(err.message, 'error'); }
+				rtPanel.classList.add('hidden');
+			}
+		}, role === 'host' ? 'End session' : 'Leave session'));
+	}
+
+	async function promptRename() {
+		const current = rt.me()?.name || '';
+		const next = window.prompt('Show up as:', current);
+		if (next === null || next.trim() === current) return;
+		try { await rt.rename(next.trim()); } catch (err) { toast(err.message, 'error'); }
+	}
+
+	rtReadyBtn.addEventListener('click', () => {
+		const mine = rt.me();
+		if (mine) rt.setReady(!mine.ready).catch((err) => toast(err.message, 'error'));
+	});
+
+	rtBtn.addEventListener('click', async () => {
+		const s = rt.getSession();
+		const role = rt.getRole();
+		if (inSession() || role === 'pending') {
+			rtPanel.classList.toggle('hidden');
+			renderPanel();
+			return;
+		}
+		try {
+			if (s) {
+				const joined = await rt.join();
+				if (rt.getRole() === 'pending') { toast('Asked to join — waiting for the host.'); }
+				else if (joined.manga.id !== manga.id) {
+					// already approved and the session is elsewhere: go there
+					handingOver = true;
+					openReader(ctx, joined.manga, joined.chapters, joined.index, 0);
+					return;
+				}
+			} else {
+				await rt.start(manga, chapterList, chIndex, 'soft');
+				toast('Reading together — your other devices can ask to join.', 'success');
+			}
+		} catch (err) {
+			toast(err.message, 'error');
+		}
+		renderRt();
+	});
+
+	// The gate moved: anyone still on the old chapter comes along. Readers who
+	// are already past it (soft gate) stay where they are.
+	function followGate() {
+		const s = rt.getSession();
+		if (!s || !inSession() || !hereNow()) return;
+		if (chIndex < s.index) loadChapter(s.index, 0);
+	}
+
+	const onRtChange = (e) => {
+		if (e.detail.declined) toast('The host didn\'t let you in.', 'error');
+		renderRt();
+		followGate();
+	};
+	window.addEventListener('rt-change', onRtChange);
+
 	function updateIndicator() {
 		pageInd.textContent = pages.length ? `${page + 1} / ${pages.length}` : '';
 		saveProgress();
+		// tell the group where we got to — reaching the last page is what marks
+		// this reader ready, so the gate depends on this going out
+		if (pages.length && inSession()) pushSync();
 		pumpLoads(); // keep page fetching prioritized around wherever the reader is
 	}
 
@@ -151,8 +356,8 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 
 	function turnPage(dir) {
 		if (prefs.mode !== 'paged') return;
-		if (page + dir < 0) { loadChapter(chIndex - 1, 'last'); return; }
-		if (page + dir >= pages.length) { loadChapter(chIndex + 1, 0); return; }
+		if (page + dir < 0) { tryChapterChange(() => loadChapter(chIndex - 1, 'last')); return; }
+		if (page + dir >= pages.length) { tryChapterChange(() => loadChapter(chIndex + 1, 0)); return; }
 		page += dir;
 		showPage();
 	}
@@ -209,7 +414,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 				scroll.append(h('div', { class: 'chapter-end' },
 					h('div', {}, `End of ${ch.num ? `chapter ${ch.num}` : 'chapter'}${online ? ' (streamed online)' : ''}`),
 					chIndex + 1 < chapterList.length
-						? h('button', { class: 'btn primary', onclick: () => loadChapter(chIndex + 1, 0) }, 'Next chapter', icon('chevron-right', 14))
+						? h('button', { class: 'btn primary', onclick: () => tryChapterChange(() => loadChapter(chIndex + 1, 0)) }, 'Next chapter', icon('chevron-right', 14))
 						: h('div', {}, 'No more chapters')
 				));
 			}
@@ -219,6 +424,10 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 			applyModeClassesOnly();
 			showPage(true);
 			if (prefs.mode === 'vertical' && page === 0) scroll.scrollTop = 0;
+			renderRt();
+			// landing in a new chapter changes whether we're done with the gate
+			// one — the group shouldn't wait on the debounce to hear it
+			if (inSession()) pushSync.flush();
 		} catch (err) {
 			clear(scroll);
 			scroll.append(h('div', { class: 'reader-loading' }, `Couldn't load chapter: ${err.message}`));
@@ -243,6 +452,11 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 
 	function close() {
 		saveProgress.flush();
+		pushSync.flush();
+		// closing the reader means leaving the session — unless we're only
+		// swapping this reader over to the series the session is on
+		if (!handingOver && rt.getRole()) rt.leave().catch(() => {});
+		window.removeEventListener('rt-change', onRtChange);
 		window.removeEventListener('keydown', onKey);
 		clearTimeout(fadeTimer);
 		readerEl.classList.add('hidden');
@@ -252,6 +466,10 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	}
 	cleanup = close;
 
+	renderRt();
 	applyMode();
 	await loadChapter(chIndex, startPage);
+	// confirms who we are in any running session, which is what tells the
+	// controls above apart from a guest and a bystander
+	rt.refresh().catch(() => {});
 }

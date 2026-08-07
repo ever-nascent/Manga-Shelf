@@ -24,7 +24,37 @@ const MUTATES = {
 	'updates:check': 'updates'
 };
 
-function createApi({ library, downloader, cache, onChange }) {
+// These act on behalf of whoever ran them — the read-together host may be the
+// PC or any linked phone, and renaming means renaming yourself — so they take
+// the caller's identity ahead of their own arguments. Every other command is
+// the same no matter who asked.
+const NEEDS_ACTOR = new Set([
+	'rt:state', 'rt:start', 'rt:join', 'rt:leave', 'rt:sync', 'rt:ready',
+	'rt:gate', 'rt:chapter', 'rt:approve', 'rt:deny', 'device:rename'
+]);
+
+// the desktop's well-known actor id (main.js hands it to every IPC dispatch)
+const DESKTOP_ID = 'desktop';
+
+function createApi({ library, downloader, cache, onChange, onDevicesChanged, readTogether }) {
+	// Naming yourself: the PC keeps one display name in settings, a phone
+	// renames its own linked-device entry. Either way you can only rename you.
+	const renameSelf = (actor, name) => {
+		const clean = String(name || '').replace(/[\u0000-\u001F\u007F]/g, '').trim().slice(0, 40);
+		if (!clean) throw new Error('Pick a name');
+		if (actor?.id === DESKTOP_ID) {
+			library.setSettings({ displayName: clean });
+		} else {
+			library.setSettings({
+				remoteDevices: (library.getSettings().remoteDevices || [])
+					.map((d) => (d.id === actor?.id ? { ...d, name: clean } : d))
+			});
+		}
+		readTogether.rename(actor?.id, clean);
+		onDevicesChanged?.();
+		return clean;
+	};
+
 	const cr = () => library.getSettings().contentRating;
 	const chapterOpts = () => {
 		const s = library.getSettings();
@@ -98,13 +128,28 @@ function createApi({ library, downloader, cache, onChange }) {
 
 		// ----- updates feed -----
 		'updates:check': () => checkForUpdates(library),
-		'updates:feed': () => library.getUpdatesFeed()
+		'updates:feed': () => library.getUpdatesFeed(),
+
+		// ----- read together (actor-aware; see NEEDS_ACTOR) -----
+		'rt:state': (actor) => readTogether.state(actor),
+		'rt:start': (actor, manga, chapters, index, gate) => readTogether.start(actor, manga, chapters, index, gate),
+		'rt:join': (actor) => readTogether.join(actor),
+		'rt:leave': (actor) => readTogether.leave(actor),
+		'rt:sync': (actor, index, page, pages) => readTogether.sync(actor, index, page, pages),
+		'rt:ready': (actor, ready) => readTogether.setReady(actor, ready),
+		'rt:gate': (actor, gate) => readTogether.setGate(actor, gate),
+		'rt:chapter': (actor, index) => readTogether.setChapter(actor, index),
+		'rt:approve': (actor, id) => readTogether.approve(actor, id),
+		'rt:deny': (actor, id) => readTogether.deny(actor, id),
+
+		// ----- naming yourself -----
+		'device:rename': (actor, name) => renameSelf(actor, name)
 	};
 
-	async function dispatch(name, args = [], source = 'desktop') {
+	async function dispatch(name, args = [], source = 'desktop', actor = null) {
 		const fn = commands[name];
 		if (!fn) throw new Error(`Unknown command: ${name}`);
-		const result = await fn(...args);
+		const result = await (NEEDS_ACTOR.has(name) ? fn(actor, ...args) : fn(...args));
 		if (MUTATES[name]) onChange?.(MUTATES[name], source);
 		return result;
 	}

@@ -13,9 +13,17 @@ const { checkForUpdates } = require('./updates');
 const appUpdater = require('./appUpdater');
 const { createApi, makePostMap } = require('./api');
 const { RemoteServer } = require('./remoteServer');
+const { ReadTogether } = require('./readTogether');
 const { UpnpMapper } = require('./upnp');
 
 const DEV = process.argv.includes('--dev');
+
+// Who the desktop is when it runs a command. Phones are identified by their
+// linked-device id; this PC is always itself, so read-together can tell the two
+// apart without the renderer having to prove anything. The name is whatever the
+// user called themselves — it's what everyone else sees on the roster.
+const DESKTOP_ID = 'desktop';
+const desktopActor = () => ({ id: DESKTOP_ID, name: library.getSettings().displayName || 'This PC' });
 
 // mangafile:// serves images from the library folder to the renderer
 protocol.registerSchemesAsPrivileged([
@@ -29,6 +37,7 @@ let downloader = null;
 let cache = null;
 let api = null;
 let remoteServer = null;
+let readTogether = null;
 let upnp = null;
 let quitConfirmed = false; // set once the user has answered the quit prompt
 let quitPromptOpen = false;
@@ -90,6 +99,11 @@ function createWindow() {
 	};
 	const revealTimer = setTimeout(reveal, 8000);
 	ipcMain.once('app:ready', () => { clearTimeout(revealTimer); reveal(); });
+
+	// A reload wipes the renderer's reader along with everything else, so the
+	// desktop can't still be sitting in a read-together session. Dropping it
+	// here also un-sticks a session whose host window was reloaded mid-read.
+	win.webContents.on('did-finish-load', () => readTogether?.dropDevice(DESKTOP_ID));
 
 	// Downloads live in memory, so closing mid-queue would silently discard
 	// them. Intercept the close and let the renderer ask what to do.
@@ -289,6 +303,13 @@ async function remoteInfo() {
 			connected: connected.has(d.id)
 		})),
 		qrDataUrl: null,
+		// linking a new device: whether the user is asked, who's asking, and
+		// what's been tried lately
+		approveNewDevices: s.approveNewDevices !== false,
+		approvalForced: Boolean(s.remoteAnywhere), // internet access takes the choice away
+		pendingPairs: running ? remoteServer.pendingPairList() : [],
+		pairAttempts: running ? remoteServer.recentAttempts() : [],
+		displayName: s.displayName || 'This PC',
 		anywhere: {
 			enabled: Boolean(s.remoteAnywhere),
 			// mapper not created or no result yet reads as "starting", since
@@ -316,7 +337,7 @@ function registerIpc() {
 	const post = makePostMap(library, toMangaFileUrl);
 	for (const name of Object.keys(api.commands)) {
 		ipcMain.handle(name, async (_e, ...args) => {
-			const result = await api.dispatch(name, args, 'desktop');
+			const result = await api.dispatch(name, args, 'desktop', desktopActor());
 			return post[name] ? post[name](result) : result;
 		});
 	}
@@ -338,6 +359,15 @@ function registerIpc() {
 		library.setSettings({ remoteAnywhere: Boolean(on) });
 		syncAnywhere().catch(() => {});
 		return remoteInfo(); // shows 'starting' now; pushes follow as the router answers
+	}));
+	ipcMain.handle('remote:setApproveDevices', wrap((on) => {
+		library.setSettings({ approveNewDevices: Boolean(on) });
+		return remoteInfo();
+	}));
+	ipcMain.handle('remote:answerPair', wrap((requestId, allow) => {
+		if (allow) remoteServer.approvePair(requestId);
+		else remoteServer.denyPair(requestId);
+		return remoteInfo();
 	}));
 	ipcMain.handle('remote:revokeDevice', wrap((id) => {
 		remoteServer.revokeDevice(id);
@@ -469,8 +499,23 @@ app.whenReady().then(() => {
 		if (win && !win.isDestroyed()) win.webContents.send('dl:updated', queue);
 		remoteServer?.broadcastQueue(queue);
 	});
-	api = createApi({ library, downloader, cache, onChange: onDomainChange });
-	remoteServer = new RemoteServer({ library, api, downloader });
+	readTogether = new ReadTogether();
+	// a read-together position has to reach both kinds of client at once: the
+	// desktop renderer over IPC, linked phones over SSE
+	readTogether.onEvent = (evt) => {
+		if (win && !win.isDestroyed()) win.webContents.send('rt:event', evt);
+		remoteServer?.broadcastReadTogether(evt);
+	};
+	api = createApi({
+		library,
+		downloader,
+		cache,
+		onChange: onDomainChange,
+		// a rename edits the linked-device list, which the Settings view shows
+		onDevicesChanged: () => remoteServer?.onInfoChanged?.(),
+		readTogether
+	});
+	remoteServer = new RemoteServer({ library, api, downloader, readTogether });
 	// pre-session versions stored a static link token; sessions replaced it
 	if ('remoteToken' in library.getSettings()) library.setSettings({ remoteToken: undefined });
 	// pairing code rotation and device link/unlink both land here — keep the
@@ -482,6 +527,16 @@ app.whenReady().then(() => {
 		} catch { /* window mid-teardown */ }
 	};
 	remoteServer.awayUrl = () => upnp?.url() || null;
+	// A device offering a valid pairing code still has to be let in by hand.
+	// The prompt is raised here rather than left in Settings, because the point
+	// of asking is that you find out even when you're not looking.
+	remoteServer.onPairRequest = (request) => {
+		if (!win || win.isDestroyed()) return;
+		if (win.isMinimized()) win.restore();
+		win.show();
+		win.focus();
+		win.webContents.send('remote:pairRequest', request);
+	};
 	if (library.getSettings().remoteEnabled) {
 		remoteServer.start()
 			.then(() => syncAnywhere())
