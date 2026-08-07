@@ -79,10 +79,10 @@ export async function setGate(gate) { applyView(await window.api.setReadTogether
 export async function setChapter(index) { applyView(await window.api.setReadTogetherChapter(index)); }
 export async function setReady(ready) { applyView(await window.api.setReadTogetherReady(ready)); }
 
+// The server puts the new name on everyone's roster itself, so there's nothing
+// to fetch back — asking again would only fire a second change for one edit.
 export async function rename(name) {
-	const clean = await window.api.renameSelf(name);
-	await refresh();
-	return clean;
+	return window.api.renameSelf(name);
 }
 
 // Where we are, pushed out. Fire-and-forget: the broadcast comes back around

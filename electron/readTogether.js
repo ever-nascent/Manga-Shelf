@@ -202,18 +202,15 @@ class ReadTogether {
 		if (actor.kind !== 'guest') throw new Error('Only invited guests can join a session');
 		const s = this.session;
 		if (!s) throw new Error('No one is reading together right now');
-		this.prunePending();
 		if (s.participants.has(actor.id)) return this.view(actor, true);
 
-		if (!s.pending.has(actor.id)) {
-			s.pending.set(actor.id, {
-				id: actor.id,
-				name: text(actor.name, 40) || 'Someone',
-				at: Date.now()
-			});
-			this.emit('pending');
-		}
-		return this.view(actor);
+		// A guest token is minted by an invite the host made, and only works for
+		// the session it was minted for — so someone coming back after their
+		// phone slept doesn't have to be let in all over again.
+		this.addParticipant({ id: actor.id, name: actor.name });
+		this.recomputeAll();
+		this.emit('joined');
+		return this.view(actor, true);
 	}
 
 	// Someone who redeemed an invite. The invite is the host's yes — they made

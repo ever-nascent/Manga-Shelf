@@ -89,10 +89,10 @@ export async function setGate(gate) { applyView(await rpc('rt:gate', gate)); }
 export async function setChapter(index) { applyView(await rpc('rt:chapter', index)); }
 export async function setReady(ready) { applyView(await rpc('rt:ready', ready)); }
 
+// The server puts the new name on everyone's roster itself, so there's nothing
+// to fetch back — asking again would only fire a second change for one edit.
 export async function rename(name) {
-	const clean = await rpc('device:rename', name);
-	await refresh();
-	return clean;
+	return rpc('device:rename', name);
 }
 
 // Where we are, pushed out. Fire-and-forget: the push comes back around and

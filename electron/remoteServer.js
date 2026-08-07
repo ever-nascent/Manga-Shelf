@@ -59,6 +59,11 @@ const PAIR_ATTEMPT_WINDOW_MS = 60 * 60_000;
 const INVITE_TTL_MS = 10 * 60_000;
 const MAX_INVITE_TTL_MS = 24 * 60 * 60_000;
 
+// How long someone keeps their place in a session after their event stream
+// drops. Long enough to cover a locked phone or a walk between rooms; short
+// enough that someone who genuinely closed the tab stops holding the gate up.
+const DISCONNECT_GRACE_MS = 90_000;
+
 // Everything a read-together guest is allowed to ask for. Anything outside this
 // is refused no matter what their client sends — the phone UI hiding the rest
 // is a convenience, this is the actual boundary. Note there's no lib:all,
@@ -161,6 +166,7 @@ class RemoteServer {
 		// good for the session it was minted for, so it dies when that ends.
 		this.guests = new Map(); // token hash -> { id, name, sessionId }
 		this.invites = new Map(); // code -> { sessionId, expiresAt }
+		this.dropTimers = new Map(); // actor id -> pending "they really did leave"
 		this.lastSeenFlushed = new Map(); // device id -> when lastSeenAt last hit disk
 		this.onInfoChanged = null; // main.js: pairing rotated or devices changed
 		this.awayUrl = null; // main.js: () => current internet URL while mapped
@@ -227,6 +233,8 @@ class RemoteServer {
 		this.prevPairCode = null;
 		this.rotatesAt = 0;
 		this.pendingPairs.clear(); // nobody can collect an answer with the server down
+		for (const t of this.dropTimers.values()) clearTimeout(t);
+		this.dropTimers.clear();
 		this.dropClients();
 		this.server.close();
 		this.server = null;
@@ -424,6 +432,26 @@ class RemoteServer {
 
 	devices() {
 		return this.library.getSettings().remoteDevices || [];
+	}
+
+	// A phone suspends its event stream whenever the screen locks or the reader
+	// goes to the background, and it reconnects seconds later. Treating that as
+	// "they left" would drop someone out of a session for glancing at a message
+	// — and silently, since their reader carries on working. So a closed stream
+	// only starts a clock.
+	scheduleDrop(id) {
+		this.cancelDrop(id);
+		this.dropTimers.set(id, setTimeout(() => {
+			this.dropTimers.delete(id);
+			if (this.connectedIds().has(id)) return; // came back on another stream
+			this.readTogether?.dropDevice(id);
+			this.onInfoChanged?.();
+		}, DISCONNECT_GRACE_MS));
+	}
+
+	cancelDrop(id) {
+		const t = this.dropTimers.get(id);
+		if (t) { clearTimeout(t); this.dropTimers.delete(id); }
 	}
 
 	// linked devices only — this is what the Settings list shows as "connected"
@@ -734,6 +762,7 @@ class RemoteServer {
 		if (this.readTogether?.active()) {
 			res.write(`event: rt\ndata: ${JSON.stringify({ type: 'started', session: this.readTogether.snapshot() })}\n\n`);
 		}
+		this.cancelDrop(actor.id); // they're back before the grace period ran out
 		this.sseClients.set(res, actor);
 		this.onInfoChanged?.(); // this client just went "connected"
 		req.on('close', () => {
@@ -741,7 +770,7 @@ class RemoteServer {
 			// A reconnecting phone briefly holds two streams, and the old one can
 			// close after the new one opens — only count it as gone once its last
 			// stream is down, or a blip would drop it from the session.
-			if (!this.connectedIds().has(actor.id)) this.readTogether?.dropDevice(actor.id);
+			if (!this.connectedIds().has(actor.id)) this.scheduleDrop(actor.id);
 			this.onInfoChanged?.();
 		});
 	}

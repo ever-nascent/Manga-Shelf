@@ -238,9 +238,18 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	});
 
 	// The gate moved: anyone still on the old chapter comes along.
-	function followGate() {
+	//
+	// Only when it actually moves. Every page turn, rename and arrival fires a
+	// change too, and navigating on those would tear this view down and refetch
+	// every page — someone renaming themselves must not restart your chapter.
+	let seenGate = rt.getSession()?.index ?? null;
+
+	function followGate({ force = false } = {}) {
 		const s = rt.getSession();
 		if (!s || !inSession() || !hereNow()) return;
+		const moved = s.index !== seenGate;
+		seenGate = s.index;
+		if (!moved && !force) return;
 		if (index < s.index) ctx.navigate('reader', { manga, chapters, index: s.index }, { replace: true });
 	}
 
@@ -325,7 +334,7 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	rt.sync(index, current, imgs.length);
 	renderRt();
 	// and if the gate moved while this chapter was loading, catch up now
-	followGate();
+	followGate({ force: true });
 
 	// arrived here from the previous chapter's auto-scroll: keep scrolling
 	if (autoScroll) startAuto();

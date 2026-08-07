@@ -267,7 +267,9 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 			return;
 		}
 		try {
-			await rt.start(manga, chapterList, chIndex, 'soft');
+			// Waiting for each other is the point of reading together, so that's
+			// how a session starts. The host can loosen it from the panel.
+			await rt.start(manga, chapterList, chIndex, 'hard');
 			toast('Reading together — invite someone from the panel.', 'success');
 			rtPanel.classList.remove('hidden');
 		} catch (err) {
@@ -278,9 +280,18 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 
 	// The gate moved: anyone still on the old chapter comes along. Readers who
 	// are already past it (soft gate) stay where they are.
-	function followGate() {
+	//
+	// Only when it actually moves. Every page turn, rename and arrival fires a
+	// change too, and reloading the chapter on those would throw away the pages
+	// already fetched for no reason.
+	let seenGate = rt.getSession()?.index ?? null;
+
+	function followGate({ force = false } = {}) {
 		const s = rt.getSession();
 		if (!s || !inSession() || !hereNow()) return;
+		const moved = s.index !== seenGate;
+		seenGate = s.index;
+		if (!moved && !force) return;
 		if (chIndex < s.index) loadChapter(s.index, 0);
 	}
 
