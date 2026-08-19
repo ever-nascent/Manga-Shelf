@@ -780,9 +780,11 @@ select option { background: var(--panel); }
 	width: min(var(--strip-width, 760px), 100%);
 	min-height: 200px;
 }
-/* pages that haven't loaded yet hold a taller placeholder so resuming
-   mid-chapter lands close to the right spot before images arrive */
-.reader-scroll.vertical .r-page.r-pending { min-height: 65vh; }
+/* Pages that haven't loaded yet reserve a box shaped like a real page, so
+   resuming mid-chapter lands close to the right spot and the strip barely
+   shifts as images arrive. A flat height guessed the same box at every strip
+   width, and the difference moved the page out from under the reader. */
+.reader-scroll.vertical .r-page.r-pending { aspect-ratio: 70 / 100; }
 
 /* paged mode */
 .reader-scroll.paged {

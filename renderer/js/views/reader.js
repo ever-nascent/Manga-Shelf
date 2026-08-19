@@ -21,8 +21,16 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 
 	let chIndex = index;
 	let page = startPage;
-	let pages = [];
+	let pages = [];    // page image URLs for the open chapter
+	let pageEls = [];  // and their <img> elements, in order
+	let currentEl = null;
 	const libEntry = await window.api.getLibraryManga(manga.id);
+
+	// The downloaded copy of a chapter, if there is one: the same chapter, or
+	// failing that any group's copy of the same chapter number.
+	const localCopy = (c) => libEntry?.chapters?.find((x) => x.id === c.id)
+		|| (c.num != null ? libEntry?.chapters?.find((x) => x.num === c.num) : null)
+		|| null;
 
 	readerEl.classList.remove('hidden');
 	clear(readerEl);
@@ -308,29 +316,49 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		// tell the group where we got to — reaching the last page is what marks
 		// this reader ready, so the gate depends on this going out
 		if (pages.length && inSession()) pushSync();
-		pumpLoads(); // keep page fetching prioritized around wherever the reader is
+		pumpLoads();    // keep page fetching prioritized around wherever the reader is
+		prefetchNext(); // and have the next chapter ready before it's asked for
 	}
 
 	// ---------- staggered page loading ----------
 	// Pages are appended without src and fetched a few at a time, nearest to the
 	// current page first — opening a 180-page chapter shouldn't burst 180
 	// simultaneous requests at the image server.
-	const LOAD_CONCURRENCY = 4;
+	//
+	// Only a window around the reader is fetched, never the whole chapter: it
+	// used to keep going regardless, so opening a long chapter and turning back
+	// after two pages still pulled every remaining page — hundreds of megabytes
+	// nobody looked at. A downloaded chapter is already on disk, so its window is
+	// much wider; there's no bandwidth to save there, only decoding work.
+	const AHEAD_ONLINE = 12;
+	const AHEAD_LOCAL = 40;
+	const BEHIND = 3;
+	let ahead = AHEAD_ONLINE;
+	let concurrency = 4;
 	let loadGen = 0; // bumped per chapter so stale onload callbacks are ignored
 	let inFlight = 0;
 
+	// Bounded by the window, so this costs the same on page 3 of a oneshot as on
+	// page 300 of a webtoon — it never walks the whole chapter.
 	function nextPending() {
-		const els = imgs();
-		for (let i = page; i < els.length; i++) if (els[i].dataset.src) return els[i];
-		for (let i = Math.min(page, els.length - 1); i >= 0; i--) if (els[i].dataset.src) return els[i];
-		return null;
+		if (!pageEls.length) return -1;
+		// page is only clamped to the chapter once showPage runs, and this is
+		// called before that on every chapter change
+		const from = Math.min(page, pageEls.length - 1);
+		const hi = Math.min(pageEls.length - 1, from + ahead);
+		for (let i = from; i <= hi; i++) if (pageEls[i].dataset.src) return i;
+		for (let i = from - 1; i >= Math.max(0, from - BEHIND); i--) {
+			if (pageEls[i].dataset.src) return i;
+		}
+		return -1;
 	}
 
 	function pumpLoads() {
 		const gen = loadGen;
-		while (inFlight < LOAD_CONCURRENCY) {
-			const el = nextPending();
-			if (!el) return;
+		while (inFlight < concurrency) {
+			const i = nextPending();
+			if (i < 0) return;
+			const el = pageEls[i];
 			inFlight++;
 			const done = () => {
 				el.classList.remove('r-pending');
@@ -340,22 +368,59 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 			};
 			el.addEventListener('load', done, { once: true });
 			el.addEventListener('error', done, { once: true });
+			// the page being read, and the one after it, are what the reader is
+			// actually waiting on; the rest of the window can queue behind them
+			el.fetchPriority = i <= page + 1 ? 'high' : 'low';
 			el.src = el.dataset.src;
 			delete el.dataset.src;
 		}
 	}
 
-	// ---------- page display ----------
-	function imgs() { return [...scroll.querySelectorAll('.r-page')]; }
+	// ---------- next-chapter prefetch ----------
+	// Turning the last page meant waiting on a fresh page-list round trip and
+	// then a cold image fetch, with nothing on screen but "Loading pages…".
+	// Warming both while the reader is still on the closing pages makes the next
+	// chapter open on an image instead. It costs one request per chapter, well
+	// inside MangaDex's 40/min budget for that endpoint, and the URLs it hands
+	// back stay valid for 15 minutes — far longer than three pages take to read.
+	let prefetchedFor = -1;
 
+	function prefetchNext() {
+		const next = chapterList[chIndex + 1];
+		if (!next || next.external || prefetchedFor === chIndex) return;
+		if (!pages.length || page < pages.length - 3) return; // not near the end yet
+		prefetchedFor = chIndex;
+		(async () => {
+			const local = localCopy(next);
+			const urls = local
+				? await window.api.getChapterPages(manga.id, local.id)
+				: await window.api.getChapterImages(next.id);
+			// the opening pages only — enough to paint the moment the reader
+			// arrives, not a second chapter's worth of traffic on spec
+			for (const url of urls.slice(0, 2)) {
+				const warm = new Image();
+				warm.fetchPriority = 'low';
+				warm.src = url;
+			}
+		})().catch(() => { /* a cold next chapter just loads the slow way */ });
+	}
+
+	// ---------- page display ----------
+	// The page elements are kept in pageEls rather than re-queried. showPage, the
+	// loader and the scroll tracker all run inside the reading loop, and a
+	// querySelectorAll over a few hundred pages on each of them was pure
+	// overhead.
 	function showPage(scrollIntoView = false) {
-		const els = imgs();
-		if (!els.length) return;
-		page = Math.max(0, Math.min(page, els.length - 1));
+		if (!pageEls.length) return;
+		page = Math.max(0, Math.min(page, pageEls.length - 1));
 		if (prefs.mode === 'paged') {
-			els.forEach((el, i) => el.classList.toggle('current', i === page));
+			// move the class between the two pages that change, rather than
+			// touching every page in the chapter on every turn
+			currentEl?.classList.remove('current');
+			currentEl = pageEls[page];
+			currentEl.classList.add('current');
 		} else if (scrollIntoView) {
-			els[page]?.scrollIntoView();
+			pageEls[page]?.scrollIntoView();
 		}
 		updateIndicator();
 	}
@@ -368,22 +433,21 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		showPage();
 	}
 
-	// vertical mode: track which page is at mid-viewport
-	let scrollRaf = null;
-	scroll.addEventListener('scroll', () => {
-		if (prefs.mode !== 'vertical' || scrollRaf) return;
-		scrollRaf = requestAnimationFrame(() => {
-			scrollRaf = null;
-			const mid = scroll.scrollTop + scroll.clientHeight / 2;
-			const els = imgs();
-			for (let i = 0; i < els.length; i++) {
-				if (els[i].offsetTop <= mid && mid < els[i].offsetTop + els[i].offsetHeight) {
-					if (page !== i) { page = i; updateIndicator(); }
-					break;
-				}
-			}
-		});
-	});
+	// Vertical mode: whichever page crosses the middle of the viewport is the one
+	// being read. Collapsing the observer's root to that middle line reports it
+	// directly, and only when it changes. The scroll handler this replaces read
+	// offsetTop and offsetHeight of every page on every frame — each read forces
+	// a layout, and the cost grew with the length of the chapter, right when
+	// images landing were invalidating that layout anyway.
+	const midObserver = new IntersectionObserver((entries) => {
+		if (prefs.mode !== 'vertical') return;
+		// a fast scroll delivers several crossings at once; the last is where
+		// the reader actually ended up
+		const landed = entries.filter((e) => e.isIntersecting).pop();
+		if (!landed) return;
+		const i = pageEls.indexOf(landed.target);
+		if (i >= 0 && i !== page) { page = i; updateIndicator(); }
+	}, { root: scroll, rootMargin: '-50% 0px -50% 0px', threshold: 0 });
 
 	// ---------- chapter loading ----------
 	async function loadChapter(newIndex, startAt) {
@@ -398,24 +462,35 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 
 		clear(scroll);
 		scroll.append(h('div', { class: 'reader-loading' }, 'Loading pages…'));
+		midObserver.disconnect();
 		pages = [];
+		pageEls = [];
+		currentEl = null;
 		updateIndicator();
 
 		try {
 			// prefer downloaded pages (any group's copy of this chapter number);
 			// fall back to streaming from MangaDex
-			const local = libEntry?.chapters?.find((c) => c.id === ch.id)
-				|| (ch.num != null && libEntry?.chapters?.find((c) => c.num === ch.num));
+			const local = localCopy(ch);
 			let urls = local ? await window.api.getChapterPages(manga.id, local.id) : [];
 			const online = !urls.length;
 			if (online) urls = await window.api.getChapterImages(ch.id);
 			if (!urls.length) throw new Error('No pages found');
 			pages = urls;
+			ahead = online ? AHEAD_ONLINE : AHEAD_LOCAL;
+			concurrency = online ? 4 : 8; // a local page costs a disk read, not a request
 
 			clear(scroll);
-			for (const url of urls) {
-				scroll.append(h('img', { class: 'r-page r-pending', dataset: { src: url }, draggable: false }));
-			}
+			pageEls = urls.map((url) => h('img', {
+				class: 'r-page r-pending',
+				dataset: { src: url },
+				// a manga page is several megapixels; decoding one on the main
+				// thread is what makes a fast scroll stutter
+				decoding: 'async',
+				draggable: false
+			}));
+			scroll.append(...pageEls);
+			for (const el of pageEls) midObserver.observe(el);
 			if (prefs.mode === 'vertical') {
 				scroll.append(h('div', { class: 'chapter-end' },
 					h('div', {}, `End of ${ch.num ? `chapter ${ch.num}` : 'chapter'}${online ? ' (streamed online)' : ''}`),
@@ -465,6 +540,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	function close() {
 		saveProgress.flush();
 		pushSync.flush();
+		midObserver.disconnect();
 		// closing the book ends the session for everyone in it
 		if (rt.getRole()) rt.leave().catch(() => {});
 		window.removeEventListener('rt-change', onRtChange);

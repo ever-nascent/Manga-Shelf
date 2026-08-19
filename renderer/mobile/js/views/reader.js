@@ -275,6 +275,9 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 		class: 'r-page',
 		src: p.startsWith('http') ? img(p) : p,
 		loading: i < 3 ? 'eager' : 'lazy',
+		// a phone decoding a several-megapixel page on the main thread is a
+		// visible hitch in the scroll; let it happen off-thread
+		decoding: 'async',
 		alt: `Page ${i + 1}`
 	}));
 	pagesEl.append(...imgs);
