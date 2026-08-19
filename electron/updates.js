@@ -76,7 +76,7 @@ async function checkForUpdates(library) {
 	for (let i = 0; i < mdFollows.length; i += 100) {
 		const chunk = mdFollows.slice(i, i + 100).map((f) => f.manga.id);
 		try {
-			const items = await mangadex.getMangaByIds(chunk);
+			const items = await mangadex.getMangaByIds(chunk, 'background');
 			for (const m of items) latestById.set(m.id, m.latestChapterId);
 		} catch (err) {
 			console.error('Update batch failed for a chunk of follows:', err.message);
@@ -93,7 +93,8 @@ async function checkForUpdates(library) {
 		try {
 			const chapters = await mangadex.getLatestChapters(id, {
 				language: settings.language,
-				contentRating: settings.contentRating
+				contentRating: settings.contentRating,
+				lane: 'background'
 			});
 			const result = collectFresh(f, chapters, stored, library);
 			added += result.added;
@@ -114,7 +115,7 @@ async function checkForUpdates(library) {
 		try {
 			// getChapters throws on a blocked page or layout change, so an empty
 			// list can't silently pass for "nothing new" anymore
-			const chapters = await mangakatana.getChapters(id);
+			const chapters = await mangakatana.getChapters(id, 'background');
 			const latest = chapters[chapters.length - 1].id; // list is oldest -> newest
 			if (latest === stored.lastCheckedChapterId) continue;
 

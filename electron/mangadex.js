@@ -1,12 +1,23 @@
 // MangaDex API client. Docs: https://api.mangadex.org/docs/
 // MangaDex asks for a descriptive User-Agent and <5 requests/sec.
 
-const { USER_AGENT, sleep, makeRateLimiter, fetchImage, fetchWithTimeout, describeFetchError } = require('./util');
+const { USER_AGENT, makeRateLimiter, fetchImage, fetchWithTimeout, describeFetchError } = require('./util');
 
 const API_BASE = 'https://api.mangadex.org';
 const COVER_BASE = 'https://uploads.mangadex.org/covers';
 
-const rateLimit = makeRateLimiter(250);
+// The same sustained rate the old fixed 250ms gap allowed, but a screen's
+// worth of requests may go at once instead of one every quarter second.
+const rateLimit = makeRateLimiter({ perSecond: 4, burst: 4 });
+
+// A 429 names when we may resume. X-RateLimit-Retry-After is a unix timestamp
+// in seconds; a plain Retry-After, where it appears at all, is seconds from now.
+function retryAt(headers) {
+	const stamp = Number(headers.get('x-ratelimit-retry-after'));
+	if (stamp > 1e9) return stamp * 1000;
+	const delta = Number(headers.get('retry-after'));
+	return Date.now() + (delta > 0 ? delta * 1000 : 2000);
+}
 
 function buildUrl(path, params = {}) {
 	const url = new URL(API_BASE + path);
@@ -21,8 +32,8 @@ function buildUrl(path, params = {}) {
 	return url;
 }
 
-async function apiFetch(path, params, attempt = 1) {
-	await rateLimit();
+async function apiFetch(path, params, { lane = 'interactive', attempt = 1 } = {}) {
+	await rateLimit(lane);
 	const url = buildUrl(path, params);
 	let res;
 	try {
@@ -31,10 +42,11 @@ async function apiFetch(path, params, attempt = 1) {
 		throw new Error(`MangaDex request ${describeFetchError(err)} on ${path}`);
 	}
 
-	if (res.status === 429 && attempt <= 3) {
-		const retryAfter = Number(res.headers.get('retry-after')) || 2;
-		await sleep(retryAfter * 1000);
-		return apiFetch(path, params, attempt + 1);
+	if (res.status === 429) {
+		// hold every caller, not just this one: it's the client being asked to
+		// slow down, and sending through a 429 is what earns an IP ban
+		rateLimit.brake(retryAt(res.headers));
+		if (attempt <= 3) return apiFetch(path, params, { lane, attempt: attempt + 1 });
 	}
 	if (!res.ok) {
 		throw new Error(`MangaDex API error ${res.status} on ${path}`);
@@ -108,11 +120,11 @@ function normalizeChapter(c) {
 
 // ---------- public API ----------
 
-async function listManga(params) {
+async function listManga(params, lane) {
 	const json = await apiFetch('/manga', {
 		'includes': ['cover_art'],
 		...params
-	});
+	}, { lane });
 	return {
 		items: (json.data || []).map(normalizeManga),
 		total: json.total || 0
@@ -214,13 +226,13 @@ async function getChapters(mangaId, { language, contentRating }) {
 	return all;
 }
 
-async function getMangaByIds(ids) {
+async function getMangaByIds(ids, lane) {
 	if (!ids.length) return [];
 	const { items } = await listManga({
 		ids: ids.slice(0, 100),
 		limit: Math.min(ids.length, 100),
 		contentRating: ['safe', 'suggestive', 'erotica', 'pornographic']
-	});
+	}, lane);
 	return items;
 }
 
@@ -238,19 +250,19 @@ async function getSimilar(manga, contentRating) {
 }
 
 // Newest few chapters of a manga (single request) — used by the update checker.
-async function getLatestChapters(mangaId, { language, contentRating, limit = 12 }) {
+async function getLatestChapters(mangaId, { language, contentRating, limit = 12, lane }) {
 	const json = await apiFetch(`/manga/${mangaId}/feed`, {
 		limit,
 		translatedLanguage: [language || 'en'],
 		contentRating,
 		'order[chapter]': 'desc'
-	});
+	}, { lane });
 	return (json.data || []).map(normalizeChapter);
 }
 
 // Returns full-size page image URLs for a chapter.
-async function getChapterImageUrls(chapterId, quality = 'data') {
-	const json = await apiFetch(`/at-home/server/${chapterId}`);
+async function getChapterImageUrls(chapterId, quality = 'data', lane) {
+	const json = await apiFetch(`/at-home/server/${chapterId}`, undefined, { lane });
 	const { baseUrl } = json;
 	const { hash } = json.chapter;
 	const files = quality === 'data-saver' ? json.chapter.dataSaver : json.chapter.data;

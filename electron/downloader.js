@@ -214,7 +214,7 @@ class Downloader {
 			}
 		}
 
-		const urls = await client.getChapterImageUrls(chapter.id, this.library.getSettings().quality);
+		const urls = await client.getChapterImageUrls(chapter.id, this.library.getSettings().quality, 'background');
 		job.total = urls.length;
 		this.notify();
 

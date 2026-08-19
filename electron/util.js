@@ -7,16 +7,68 @@ const USER_AGENT = 'MangaShelf/2.0 (personal desktop reader; github.com/Literall
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Serializes requests to one host: each caller awaits its slot, slots are
-// spaced gapMs apart.
-function makeRateLimiter(gapMs) {
-	let nextSlot = 0;
-	return async function rateLimit() {
+// Paces our own requests to one API.
+//
+// MangaDex allows roughly 5 requests a second per IP, answers 429 to everything
+// past that, and — if a client keeps sending while being told 429 — bans the IP
+// outright. So the budget is worth spending carefully. Three things do that:
+//
+//   a token bucket, so a burst that is already inside the budget goes at once
+//     instead of being spread out. The old limiter left a fixed gap between
+//     every request, which cost the Home screen half a second and a series page
+//     nearly a second of waiting on nothing but us;
+//   two lanes, so the update check and the download queue can't put a screen the
+//     user is waiting on behind twenty of their own requests;
+//   one brake, shared. A 429 is aimed at the client, not at the request that
+//     happened to hear it, so it holds everyone. Carrying on regardless is the
+//     documented way to turn a 429 into a ban.
+//
+// perSecond is the sustained rate and burst is how much may go at once. The
+// long-run rate is what MangaDex actually meters, and it is unchanged from the
+// fixed gap this replaces.
+const LANES = { interactive: 0, background: 1 };
+
+function makeRateLimiter({ perSecond, burst = perSecond }) {
+	let tokens = burst;
+	let filled = Date.now();
+	let brakeUntil = 0;
+	let timer = null;
+	const lanes = [[], []]; // interactive first, background behind it
+
+	function pump() {
+		clearTimeout(timer);
+		timer = null;
+
 		const now = Date.now();
-		const wait = Math.max(0, nextSlot - now);
-		nextSlot = Math.max(now, nextSlot) + gapMs;
-		if (wait > 0) await sleep(wait);
+		tokens = Math.min(burst, tokens + ((now - filled) / 1000) * perSecond);
+		filled = now;
+
+		while (now >= brakeUntil && tokens >= 1) {
+			const lane = lanes[0].length ? lanes[0] : lanes[1];
+			if (!lane.length) return;
+			tokens -= 1;
+			lane.shift()();
+		}
+		if (lanes[0].length || lanes[1].length) {
+			const forBrake = brakeUntil - now;
+			const forToken = ((1 - tokens) / perSecond) * 1000;
+			timer = setTimeout(pump, Math.max(forBrake, forToken, 5));
+		}
+	}
+
+	const rateLimit = (lane = 'interactive') => new Promise((resolve) => {
+		lanes[LANES[lane] ?? 0].push(resolve);
+		pump();
+	});
+
+	// Hold every caller until `untilMs`, because the server is talking to the
+	// client as a whole. Never shortens an existing hold.
+	rateLimit.brake = (untilMs) => {
+		brakeUntil = Math.max(brakeUntil, untilMs);
+		pump();
 	};
+
+	return rateLimit;
 }
 
 // Node's fetch has no default timeout, so a socket that opens and then goes

@@ -8,14 +8,16 @@
 // Both map straight back to a URL under BASE.
 
 const cheerio = require('cheerio');
-const { USER_AGENT, sleep, makeRateLimiter, fetchImage, fetchWithTimeout, describeFetchError } = require('./util');
+const { USER_AGENT, makeRateLimiter, fetchImage, fetchWithTimeout, describeFetchError } = require('./util');
 
 const BASE = 'https://mangakatana.com';
 
-const rateLimit = makeRateLimiter(400);
+// Scraping HTML off someone's site, so this stays gentle: no burst, and the
+// update check queues behind anything a user is looking at.
+const rateLimit = makeRateLimiter({ perSecond: 2.5, burst: 1 });
 
-async function htmlFetch(url, attempt = 1) {
-	await rateLimit();
+async function htmlFetch(url, { lane, attempt = 1 } = {}) {
+	await rateLimit(lane);
 	let res;
 	try {
 		res = await fetchWithTimeout(url, { headers: { 'User-Agent': USER_AGENT } });
@@ -23,9 +25,9 @@ async function htmlFetch(url, attempt = 1) {
 		throw new Error(`MangaKatana request ${describeFetchError(err)}: ${url}`);
 	}
 	if (!res.ok) {
-		if (res.status === 429 && attempt <= 3) {
-			await sleep(1500 * attempt);
-			return htmlFetch(url, attempt + 1);
+		if (res.status === 429) {
+			rateLimit.brake(Date.now() + 1500 * attempt);
+			if (attempt <= 3) return htmlFetch(url, { lane, attempt: attempt + 1 });
 		}
 		throw new Error(`MangaKatana request failed (${res.status}): ${url}`);
 	}
@@ -180,9 +182,9 @@ function parseChapterNumAndTitle(linkText) {
 	return { num: m[1], title: m[2].trim() };
 }
 
-async function getChapters(mangaId) {
+async function getChapters(mangaId, lane) {
 	const url = mangaUrlFromId(mangaId);
-	const html = await htmlFetch(url);
+	const html = await htmlFetch(url, { lane });
 	const $ = cheerio.load(html);
 	const slugId = slugFromMangaId(mangaId);
 	const chapters = [];
