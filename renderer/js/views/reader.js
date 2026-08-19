@@ -316,7 +316,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		// tell the group where we got to — reaching the last page is what marks
 		// this reader ready, so the gate depends on this going out
 		if (pages.length && inSession()) pushSync();
-		pumpLoads();    // keep page fetching prioritized around wherever the reader is
+		requestPump();  // keep page fetching prioritized around wherever the reader is
 		prefetchNext(); // and have the next chapter ready before it's asked for
 	}
 
@@ -337,43 +337,101 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	let concurrency = 4;
 	let loadGen = 0; // bumped per chapter so stale onload callbacks are ignored
 	let inFlight = 0;
+	let travel = 1;  // +1 reading forwards, -1 backwards; the window leans this way
+	const loading = new Map(); // index -> { el, settle } for the requests in flight
+
+	// How far ahead of the reader a page is *in the direction they're moving*, so
+	// the same arithmetic works scrolling either way.
+	function lead(i) {
+		return (i - Math.min(page, pageEls.length - 1)) * travel;
+	}
 
 	// Bounded by the window, so this costs the same on page 3 of a oneshot as on
-	// page 300 of a webtoon — it never walks the whole chapter.
+	// page 300 of a webtoon — it never walks the whole chapter. The deep half
+	// points the way the reader is going: someone scrolling back up a chapter
+	// needs the read-ahead behind them, and used to get three pages of it
+	// against twelve going the other way.
 	function nextPending() {
 		if (!pageEls.length) return -1;
 		// page is only clamped to the chapter once showPage runs, and this is
 		// called before that on every chapter change
 		const from = Math.min(page, pageEls.length - 1);
-		const hi = Math.min(pageEls.length - 1, from + ahead);
-		for (let i = from; i <= hi; i++) if (pageEls[i].dataset.src) return i;
-		for (let i = from - 1; i >= Math.max(0, from - BEHIND); i--) {
-			if (pageEls[i].dataset.src) return i;
+		const last = pageEls.length - 1;
+		for (let d = 0; d <= ahead; d++) {
+			const i = from + d * travel;
+			if (i >= 0 && i <= last && pageEls[i].dataset.src) return i;
+		}
+		for (let d = 1; d <= BEHIND; d++) {
+			const i = from - d * travel;
+			if (i >= 0 && i <= last && pageEls[i].dataset.src) return i;
 		}
 		return -1;
 	}
 
+	// A jump — a flick, a scrollbar drag, the chapter dropdown — leaves requests
+	// in flight for pages the reader has already left. Nothing used to cancel
+	// them, so they held every slot and the page now on screen queued behind
+	// megabytes nobody was going to look at: on a slow connection that doubled
+	// the wait after every jump. Let them go and refill from where the reader is.
+	function dropStrayLoads() {
+		for (const [i, rec] of loading) {
+			const d = lead(i);
+			if (d >= -BEHIND && d <= ahead) continue;
+			loading.delete(i);
+			inFlight--;
+			rec.el.removeEventListener('load', rec.settle);
+			rec.el.removeEventListener('error', rec.settle);
+			rec.el.dataset.src = pages[i];  // back onto the pending list
+			rec.el.removeAttribute('src');  // and drop the request itself
+			rec.el.classList.add('r-pending');
+		}
+	}
+
 	function pumpLoads() {
+		dropStrayLoads();
 		const gen = loadGen;
 		while (inFlight < concurrency) {
 			const i = nextPending();
 			if (i < 0) return;
 			const el = pageEls[i];
 			inFlight++;
-			const done = () => {
+			const settle = () => {
 				el.classList.remove('r-pending');
-				if (gen !== loadGen) return;
+				// a stale chapter, or a load we already gave up on
+				if (gen !== loadGen || loading.get(i)?.el !== el) return;
+				loading.delete(i);
 				inFlight--;
 				pumpLoads();
 			};
-			el.addEventListener('load', done, { once: true });
-			el.addEventListener('error', done, { once: true });
+			loading.set(i, { el, settle });
+			el.addEventListener('load', settle, { once: true });
+			el.addEventListener('error', settle, { once: true });
 			// the page being read, and the one after it, are what the reader is
 			// actually waiting on; the rest of the window can queue behind them
-			el.fetchPriority = i <= page + 1 ? 'high' : 'low';
+			const d = lead(i);
+			el.fetchPriority = d >= 0 && d <= 1 ? 'high' : 'low';
 			el.src = el.dataset.src;
 			delete el.dataset.src;
 		}
+	}
+
+	// A flick crosses pages faster than any one of them could load. Refilling the
+	// window at each page it passes would start a request and abandon it a moment
+	// later, so while the reader is still moving that fast we let the stale loads
+	// go and leave the slots empty until they settle. Anything that finishes a
+	// load pumps directly — only reader movement comes through here.
+	const SETTLE_MS = 140;
+	let lastMove = -Infinity;
+	let pumpTimer = null;
+
+	function requestPump() {
+		const now = performance.now();
+		const flicking = now - lastMove < SETTLE_MS;
+		lastMove = now;
+		clearTimeout(pumpTimer);
+		if (!flicking) { pumpLoads(); return; }
+		dropStrayLoads();
+		pumpTimer = setTimeout(pumpLoads, SETTLE_MS);
 	}
 
 	// ---------- next-chapter prefetch ----------
@@ -429,6 +487,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		if (prefs.mode !== 'paged') return;
 		if (page + dir < 0) { tryChapterChange(() => loadChapter(chIndex - 1, 'last')); return; }
 		if (page + dir >= pages.length) { tryChapterChange(() => loadChapter(chIndex + 1, 0)); return; }
+		travel = dir;
 		page += dir;
 		showPage();
 	}
@@ -446,7 +505,10 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		const landed = entries.filter((e) => e.isIntersecting).pop();
 		if (!landed) return;
 		const i = pageEls.indexOf(landed.target);
-		if (i >= 0 && i !== page) { page = i; updateIndicator(); }
+		if (i < 0 || i === page) return;
+		travel = i > page ? 1 : -1;
+		page = i;
+		updateIndicator();
 	}, { root: scroll, rootMargin: '-50% 0px -50% 0px', threshold: 0 });
 
 	// ---------- chapter loading ----------
@@ -456,6 +518,12 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		chIndex = newIndex;
 		loadGen++;
 		inFlight = 0;
+		loading.clear();
+		clearTimeout(pumpTimer);
+		lastMove = -Infinity;
+		// turning back from the next chapter lands on this one's last page, and
+		// from there the reader is heading for its first
+		travel = startAt === 'last' ? -1 : 1;
 		chapterSelect.set(chIndex);
 		const ch = chapterList[chIndex];
 		titleEl.textContent = `${manga.title} — ${ch.num ? `Ch. ${ch.num}` : (ch.title || 'Oneshot')}`;
@@ -541,6 +609,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		saveProgress.flush();
 		pushSync.flush();
 		midObserver.disconnect();
+		clearTimeout(pumpTimer);
 		// closing the book ends the session for everyone in it
 		if (rt.getRole()) rt.leave().catch(() => {});
 		window.removeEventListener('rt-change', onRtChange);
