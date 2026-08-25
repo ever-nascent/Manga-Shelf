@@ -6,6 +6,7 @@ import { h, clear, spinner, errorBox, chapterName, debounce, toast } from '../ut
 import { rpc, img } from '../api.js';
 import { icon } from '../icons.js';
 import * as rt from '../readTogether.js';
+import * as gate from '/shared/rtGate.js';
 
 // Auto-scroll speeds in px/second; remembered across chapters within a session.
 const AUTO_SPEEDS = [30, 55, 90, 140, 210, 300];
@@ -176,29 +177,17 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	// invited. Your own linked phone isn't a session participant — the PC holds
 	// the host seat — so for it none of this shows at all.
 	const inSession = () => rt.getRole() === 'guest';
-	const hereNow = () => rt.getSession()?.manga.id === manga.id;
-	const allReady = () => !(rt.getSession()?.waitingOn.length);
-
-	// A hard gate holds everyone on the gate chapter until they're all done.
-	// Being past it already doesn't count — that reader is through.
-	function gateHolds() {
-		const s = rt.getSession();
-		return Boolean(s) && s.gate === 'hard' && inSession() && hereNow()
-			&& index <= s.index && !allReady();
-	}
+	const hereNow = () => gate.hereNow(rt.getSession(), manga.id, inSession());
+	const allReady = () => gate.allReady(rt.getSession());
+	const gateHolds = () => gate.gateHolds(rt.getSession(),
+		{ mangaId: manga.id, index, inSession: inSession() });
 
 	function tryChapterChange(run) {
 		if (!gateHolds()) { run(); return; }
-		toast(`Waiting for ${rt.getSession().waitingOn.join(' and ')} to finish this chapter.`);
+		toast(`Waiting for ${gate.waitingFor(rt.getSession())} to finish this chapter.`);
 	}
 
-	function pageOf(p) {
-		if (p.index !== index) {
-			const c = chapters[p.index];
-			return c?.num ? `Ch. ${c.num}` : `Ch. ${p.index + 1}`;
-		}
-		return p.pages ? `p. ${p.page + 1}/${p.pages}` : '—';
-	}
+	const pageOf = (p) => gate.whereTheyAre(p, { index, chapters });
 
 	function renderRt() {
 		const s = rt.getSession();

@@ -2,6 +2,7 @@ import { h, clear, toast, debounce } from '../util.js';
 import { styledSelect, openInviteDialog, confirmEndSession } from '../components.js';
 import { icon } from '../icons.js';
 import * as rt from '../readTogether.js';
+import * as gate from '../../shared/rtGate.js';
 
 const readerEl = document.getElementById('reader');
 
@@ -142,32 +143,18 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	const pushSync = debounce(() => rt.sync(chIndex, page, pages.length), 300);
 
 	const inSession = () => ['host', 'guest'].includes(rt.getRole());
-	const hereNow = () => rt.getSession()?.manga.id === manga.id;
-	const allReady = () => !(rt.getSession()?.waitingOn.length);
-
-	// A hard gate holds everyone on the gate chapter until they're all done.
-	// Being ahead of it already (from before the host switched modes) doesn't
-	// count — that reader is past the gate and free to carry on.
-	function gateHolds() {
-		const s = rt.getSession();
-		return Boolean(s) && s.gate === 'hard' && inSession() && hereNow()
-			&& chIndex <= s.index && !allReady();
-	}
+	const hereNow = () => gate.hereNow(rt.getSession(), manga.id, inSession());
+	const allReady = () => gate.allReady(rt.getSession());
+	const gateHolds = () => gate.gateHolds(rt.getSession(),
+		{ mangaId: manga.id, index: chIndex, inSession: inSession() });
 
 	// every hand-driven chapter change goes through here
 	function tryChapterChange(run) {
 		if (!gateHolds()) { run(); return; }
-		const waiting = rt.getSession().waitingOn;
-		toast(`Waiting for ${waiting.join(' and ')} to finish this chapter.`);
+		toast(`Waiting for ${gate.waitingFor(rt.getSession())} to finish this chapter.`);
 	}
 
-	function pageOf(p) {
-		if (p.index !== chIndex) {
-			const ch = chapterList[p.index];
-			return ch?.num ? `Ch. ${ch.num}` : `Ch. ${p.index + 1}`;
-		}
-		return p.pages ? `p. ${p.page + 1}/${p.pages}` : '—';
-	}
+	const pageOf = (p) => gate.whereTheyAre(p, { index: chIndex, chapters: chapterList });
 
 	function renderRt() {
 		const s = rt.getSession();
