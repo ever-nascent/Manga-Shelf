@@ -3,6 +3,7 @@
 // passed straight through so views keep importing everything from one place.
 
 export { h, clear } from '/shared/dom.js';
+export { debounce } from '/shared/timing.js';
 import { h } from '/shared/dom.js';
 
 export const spinner = () => h('div', { class: 'spinner' });
@@ -27,23 +28,6 @@ export function fmtDate(iso) {
 
 // The returned function also has .flush(): run a pending call immediately
 // (the reader uses it so leaving never drops the last progress save).
-export function debounce(fn, ms) {
-	let t;
-	let pending = null;
-	const wrapped = (...args) => {
-		pending = args;
-		clearTimeout(t);
-		t = setTimeout(() => { pending = null; fn(...args); }, ms);
-	};
-	wrapped.flush = () => {
-		if (!pending) return;
-		clearTimeout(t);
-		const args = pending;
-		pending = null;
-		fn(...args);
-	};
-	return wrapped;
-}
 
 export const STATUS_LABEL = {
 	ongoing: 'Ongoing',
