@@ -7,6 +7,8 @@ import { rpc, img } from '../api.js';
 import { icon } from '../icons.js';
 import * as rt from '../readTogether.js';
 import * as gate from '/shared/rtGate.js';
+import { createPageCache } from '/shared/pageList.js';
+import { pageOnScreen } from '/shared/scroll.js';
 
 // Auto-scroll speeds in px/second; remembered across chapters within a session.
 const AUTO_SPEEDS = [30, 55, 90, 140, 210, 300];
@@ -20,31 +22,15 @@ const LOAD_CONCURRENCY = 5;
 const PAGE_RETRIES = 2;
 
 // Page lists for chapters we've already asked about, so turning to the next one
-// doesn't wait on a round trip to the PC and out to MangaDex. Kept just long
-// enough to be useful — streamed page URLs are signed and go stale.
-const PAGE_LIST_TTL_MS = 4 * 60_000;
-const pageLists = new Map(); // chapter id -> { at, urls }
-
-function rememberPages(chapterId, urls) {
-	pageLists.set(chapterId, { at: Date.now(), urls });
-	if (pageLists.size > 6) pageLists.delete(pageLists.keys().next().value);
-}
-
-function recallPages(chapterId) {
-	const hit = pageLists.get(chapterId);
-	if (!hit) return null;
-	if (Date.now() - hit.at > PAGE_LIST_TTL_MS) { pageLists.delete(chapterId); return null; }
-	return hit.urls;
-}
+// doesn't wait on a round trip to the PC and out to MangaDex.
+const pageCache = createPageCache();
 
 // Downloaded pages come off the PC's disk; everything else streams through it.
-async function fetchPages(mangaId, chapterId) {
-	const cached = recallPages(chapterId);
-	if (cached) return cached;
-	let urls = await rpc('lib:pages', mangaId, chapterId).catch(() => []);
-	if (!urls.length) urls = await rpc('md:chapterImages', chapterId);
-	if (urls.length) rememberPages(chapterId, urls);
-	return urls;
+function fetchPages(mangaId, chapterId) {
+	return pageCache.load(chapterId, async () => {
+		const downloaded = await rpc('lib:pages', mangaId, chapterId).catch(() => []);
+		return downloaded.length ? downloaded : rpc('md:chapterImages', chapterId);
+	}, (urls) => urls.length);
 }
 
 export async function render(root, { manga, chapters, index, page = 0, autoScroll = false }, ctx, signal) {
@@ -432,27 +418,8 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	};
 	requestAnimationFrame(hold);
 
-	// Which page you're on is the one filling most of the screen — the middle
-	// pixel alone got it wrong either way round, calling it the next page on a
-	// short page and the previous one on a tall one.
-	const pageOnScreen = () => {
-		const top = root.scrollTop;
-		const bottom = top + root.clientHeight;
-		let best = 0;
-		let bestCover = -1;
-		for (let i = 0; i < slots.length; i++) {
-			const start = slots[i].offsetTop;
-			const end = start + slots[i].offsetHeight;
-			if (end <= top) continue;
-			if (start >= bottom) break;
-			const cover = Math.min(end, bottom) - Math.max(start, top);
-			if (cover > bestCover) { bestCover = cover; best = i; }
-		}
-		return best;
-	};
-
 	const update = () => {
-		const idx = pageOnScreen();
+		const idx = pageOnScreen(root, slots);
 		if (idx !== current) {
 			current = idx;
 			saveProgress();

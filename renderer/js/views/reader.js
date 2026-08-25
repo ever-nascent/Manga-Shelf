@@ -3,6 +3,8 @@ import { styledSelect, openInviteDialog, confirmEndSession } from '../components
 import { icon } from '../icons.js';
 import * as rt from '../readTogether.js';
 import * as gate from '../../shared/rtGate.js';
+import { createPageCache } from '../../shared/pageList.js';
+import { pageOnScreen } from '../../shared/scroll.js';
 
 const readerEl = document.getElementById('reader');
 
@@ -18,36 +20,20 @@ const prefs = {
 let cleanup = null;
 
 // Page lists for chapters already asked about, so turning to the next one
-// doesn't wait on a round trip out to MangaDex. Streamed page URLs are signed
-// and go stale, so these are kept only as long as they're good for.
-const PAGE_LIST_TTL_MS = 4 * 60_000;
-const pageLists = new Map(); // chapter id -> { at, urls, online }
-
-function rememberPages(chapterId, value) {
-	pageLists.set(chapterId, { at: Date.now(), ...value });
-	if (pageLists.size > 6) pageLists.delete(pageLists.keys().next().value);
-}
-
-function recallPages(chapterId) {
-	const hit = pageLists.get(chapterId);
-	if (!hit) return null;
-	if (Date.now() - hit.at > PAGE_LIST_TTL_MS) { pageLists.delete(chapterId); return null; }
-	return hit;
-}
+// doesn't wait on a round trip out to MangaDex.
+const pageCache = createPageCache();
 
 // Prefer downloaded pages (any group's copy of this chapter number); fall back
-// to streaming from MangaDex.
-async function fetchPages(mangaId, libEntry, ch) {
-	const cached = recallPages(ch.id);
-	if (cached) return cached;
-	const local = libEntry?.chapters?.find((c) => c.id === ch.id)
-		|| (ch.num != null && libEntry?.chapters?.find((c) => c.num === ch.num));
-	let urls = local ? await window.api.getChapterPages(mangaId, local.id) : [];
-	const online = !urls.length;
-	if (online) urls = await window.api.getChapterImages(ch.id);
-	const value = { urls, online };
-	if (urls.length) rememberPages(ch.id, value);
-	return value;
+// to streaming from MangaDex. Whether it came from disk or the wire is part of
+// the answer — the end of a streamed chapter says so.
+function fetchPages(mangaId, libEntry, ch) {
+	return pageCache.load(ch.id, async () => {
+		const local = libEntry?.chapters?.find((c) => c.id === ch.id)
+			|| (ch.num != null && libEntry?.chapters?.find((c) => c.num === ch.num));
+		const downloaded = local ? await window.api.getChapterPages(mangaId, local.id) : [];
+		if (downloaded.length) return { urls: downloaded, online: false };
+		return { urls: await window.api.getChapterImages(ch.id), online: true };
+	}, (v) => v.urls.length);
 }
 
 export async function openReader(ctx, manga, chapterList, index, startPage = 0) {
@@ -445,31 +431,12 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		showPage();
 	}
 
-	// Vertical mode: the page you're on is the one filling most of the window.
-	// The middle pixel alone got it wrong either way round — the next page on a
-	// short one, the previous on a tall one.
-	function pageOnScreen() {
-		const top = scroll.scrollTop;
-		const bottom = top + scroll.clientHeight;
-		let best = 0;
-		let bestCover = -1;
-		for (let i = 0; i < pageEls.length; i++) {
-			const start = pageEls[i].offsetTop;
-			const end = start + pageEls[i].offsetHeight;
-			if (end <= top) continue;
-			if (start >= bottom) break;
-			const cover = Math.min(end, bottom) - Math.max(start, top);
-			if (cover > bestCover) { bestCover = cover; best = i; }
-		}
-		return best;
-	}
-
 	let scrollRaf = null;
 	scroll.addEventListener('scroll', () => {
 		if (prefs.mode !== 'vertical' || scrollRaf || !pageEls.length) return;
 		scrollRaf = requestAnimationFrame(() => {
 			scrollRaf = null;
-			const i = pageOnScreen();
+			const i = pageOnScreen(scroll, pageEls);
 			if (page !== i) { page = i; updateIndicator(); }
 		});
 	}, { passive: true });
@@ -558,7 +525,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 					const pre = new Image();
 					pre.src = url;
 				}
-			}).catch(() => { pageLists.delete(next.id); });
+			}).catch(() => { pageCache.forget(next.id); });
 		}, 2500);
 	}
 
