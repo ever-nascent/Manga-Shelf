@@ -1,30 +1,18 @@
-// Formatting helpers shared by every view. The DOM builder itself lives in
-// renderer/shared, where the phone can reach it too, and is passed straight
-// through so views keep importing everything from one place.
+// What every view imports. Most of it is the same file the phone uses, from
+// renderer/shared, passed straight through so a view still has one place to
+// import from. What's left here is what only this app has, and the one thing
+// the two do differently: where a link in a description opens.
 
 export { h, clear } from '../shared/dom.js';
 export { debounce } from '../shared/timing.js';
+export { spinner, errorBox, toast } from '../shared/ui.js';
+export { fmtDate } from '../shared/format.js';
 export {
 	STATUS_LABEL, FOLLOW_STATUSES, followStatusLabel,
 	chapterName, resumeIndex, dedupeChapters
 } from '../shared/manga.js';
 import { mdBlocks, mdInline } from '../shared/markdown.js';
 import { h } from '../shared/dom.js';
-
-export const spinner = () => h('div', { class: 'spinner' });
-
-export function errorBox(message, retry) {
-	return h('div', { class: 'error-box' },
-		h('div', {}, message),
-		retry && h('button', { class: 'btn', onclick: retry }, 'Retry')
-	);
-}
-
-export function toast(message, type = 'info', ms = 3500) {
-	const el = h('div', { class: `toast ${type}` }, message);
-	document.getElementById('toasts').append(el);
-	setTimeout(() => el.remove(), ms);
-}
 
 export function fmtNum(n) {
 	if (n === null || n === undefined) return '—';
@@ -40,11 +28,6 @@ export function fmtBytes(n) {
 	let i = 0;
 	while (v >= 1024 && i < units.length - 1) { v /= 1024; i++; }
 	return `${v >= 10 || i === 0 ? Math.round(v) : v.toFixed(1)} ${units[i]}`;
-}
-
-export function fmtDate(iso) {
-	if (!iso) return '';
-	return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
 }
 
 // MangaDex descriptions are Markdown. Render a safe subset (paragraphs, lists,
