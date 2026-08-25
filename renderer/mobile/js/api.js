@@ -2,6 +2,8 @@
 // this phone's own session token, then every command goes to POST /api/<cmd>
 // with it; live pushes (queue progress, change pings) arrive over SSE.
 
+import { retryOnError } from '/shared/retryImage.js';
+
 const TOKEN_KEY = 'mstoken';
 const GUEST_KEY = 'msguest';
 
@@ -166,24 +168,16 @@ export function img(url) {
 }
 
 // A cover that doesn't arrive first time is usually a busy moment, not a
-// missing file — a home screen asks for fifty at once. Asking again beats the
-// broken square a phone browser draws and never revisits.
-const COVER_RETRIES = 2;
-
+// missing file — a home screen asks for fifty at once. A retry carries a
+// different query string so it can't be answered from the browser's own memory
+// of the failure.
 export function coverImg(url, props = {}) {
 	const src = img(url);
 	const el = document.createElement('img');
 	for (const [k, v] of Object.entries({ loading: 'lazy', decoding: 'async', alt: '', ...props })) {
 		el.setAttribute(k, v);
 	}
-	let tries = 0;
-	el.addEventListener('error', () => {
-		if (++tries > COVER_RETRIES) return;
-		setTimeout(() => {
-			el.removeAttribute('src');
-			el.src = `${src}${src.includes('?') ? '&' : '?'}r=${tries}`;
-		}, 500 * tries);
-	});
+	retryOnError(el, src, { urlFor: (s, n) => `${s}${s.includes('?') ? '&' : '?'}r=${n}` });
 	el.src = src;
 	return el;
 }
