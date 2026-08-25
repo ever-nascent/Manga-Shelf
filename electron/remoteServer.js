@@ -32,6 +32,10 @@ const { ImageCache } = require('./imageCache');
 const DEFAULT_PORT = 8420;
 const PORT_TRIES = 10;
 const MOBILE_DIR = path.join(__dirname, '..', 'renderer', 'mobile');
+// Helpers both front-ends use. The desktop imports them off disk; the phone gets
+// them from here, under a path of their own so the app shell stays one folder.
+const SHARED_DIR = path.join(__dirname, '..', 'renderer', 'shared');
+const SHARED_PREFIX = '/shared/';
 
 // unambiguous alphabet (no 0/O, 1/I/L) — the code may be typed by hand
 const PAIR_ALPHABET = 'ABCDEFGHJKMNPQRSTUVWXYZ23456789';
@@ -869,10 +873,15 @@ class RemoteServer {
 	}
 
 	handleStatic(req, res, u) {
-		const rel = u.pathname === '/' ? 'index.html' : u.pathname.slice(1);
-		const abs = path.normalize(path.join(MOBILE_DIR, rel));
+		// Two roots, one rule: whatever the path asks for has to land inside the
+		// root it was resolved against, or it isn't served.
+		const shared = u.pathname.startsWith(SHARED_PREFIX);
+		const root = shared ? SHARED_DIR : MOBILE_DIR;
+		const rel = shared ? u.pathname.slice(SHARED_PREFIX.length)
+			: (u.pathname === '/' ? 'index.html' : u.pathname.slice(1));
+		const abs = path.normalize(path.join(root, rel));
 		let stat;
-		if (!abs.startsWith(MOBILE_DIR + path.sep) || !fs.existsSync(abs) || !(stat = fs.statSync(abs)).isFile()) {
+		if (!abs.startsWith(root + path.sep) || !fs.existsSync(abs) || !(stat = fs.statSync(abs)).isFile()) {
 			res.writeHead(404, { 'Content-Type': 'text/plain' });
 			return res.end('Not found');
 		}

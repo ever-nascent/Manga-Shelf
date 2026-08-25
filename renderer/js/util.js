@@ -1,29 +1,9 @@
-// Small DOM + formatting helpers shared by every view.
+// Formatting helpers shared by every view. The DOM builder itself lives in
+// renderer/shared, where the phone can reach it too, and is passed straight
+// through so views keep importing everything from one place.
 
-export function h(tag, props = {}, ...children) {
-	const el = document.createElement(tag);
-	for (const [key, value] of Object.entries(props || {})) {
-		if (value === undefined || value === null) continue;
-		if (key === 'class') el.className = value;
-		else if (key === 'dataset') Object.assign(el.dataset, value);
-		else if (key === 'style' && typeof value === 'object') Object.assign(el.style, value);
-		else if (key.startsWith('on') && typeof value === 'function') el.addEventListener(key.slice(2), value);
-		else if (key in el && key !== 'list' && key !== 'form') el[key] = value;
-		else el.setAttribute(key, value);
-	}
-	append(el, children);
-	return el;
-}
-
-function append(el, child) {
-	if (child === null || child === undefined || child === false) return;
-	if (Array.isArray(child)) { child.forEach((c) => append(el, c)); return; }
-	el.append(child.nodeType ? child : document.createTextNode(String(child)));
-}
-
-export function clear(el) {
-	while (el.firstChild) el.removeChild(el.firstChild);
-}
+export { h, clear } from '../shared/dom.js';
+import { h } from '../shared/dom.js';
 
 export const spinner = () => h('div', { class: 'spinner' });
 
