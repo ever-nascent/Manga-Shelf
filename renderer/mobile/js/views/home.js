@@ -1,9 +1,9 @@
 import { h, clear, spinner, errorBox } from '../util.js';
-import { rpc, img } from '../api.js';
+import { rpc, coverImg } from '../api.js';
 
 function card(m, ctx, sub = null) {
 	return h('div', { class: 'm-card', onclick: () => ctx.navigate('detail', { id: m.id }) },
-		h('div', { class: 'm-cover' }, m.coverUrl && h('img', { src: img(m.coverUrl), loading: 'lazy', alt: '' })),
+		h('div', { class: 'm-cover' }, m.coverUrl && coverImg(m.coverUrl)),
 		h('div', { class: 'm-title' }, m.title),
 		sub && h('div', { class: 'm-sub' }, sub)
 	);

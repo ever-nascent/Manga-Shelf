@@ -2,7 +2,7 @@
 // window into it, kept fresh by SSE queue events.
 
 import { h, clear, toast } from '../util.js';
-import { rpc, img, getQueue } from '../api.js';
+import { rpc, coverImg, getQueue } from '../api.js';
 import { icon } from '../icons.js';
 
 const STATUS_TEXT = {
@@ -34,7 +34,7 @@ export async function render(root, params, ctx, signal) {
 				: h('span', { class: 'icon-btn done' }, icon('check', 18));
 
 		return h('div', { class: `dl-row ${j.status}` },
-			h('div', { class: 'dl-cover' }, j.coverUrl && h('img', { src: img(j.coverUrl), loading: 'lazy', alt: '' })),
+			h('div', { class: 'dl-cover' }, j.coverUrl && coverImg(j.coverUrl)),
 			h('div', { class: 'dl-info' },
 				h('div', { class: 'dl-title' }, j.mangaTitle),
 				h('div', { class: 'dl-sub' },

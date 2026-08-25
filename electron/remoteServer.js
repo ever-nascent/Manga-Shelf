@@ -21,11 +21,13 @@
 
 const http = require('http');
 const crypto = require('crypto');
+const zlib = require('zlib');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
-const { USER_AGENT, fetchWithTimeout, describeFetchError, IMAGE_TIMEOUT_MS, isDirectlyReachable } = require('./util');
+const { isDirectlyReachable } = require('./util');
 const { makePostMap } = require('./api');
+const { ImageCache } = require('./imageCache');
 
 const DEFAULT_PORT = 8420;
 const PORT_TRIES = 10;
@@ -75,6 +77,10 @@ const GUEST_COMMANDS = new Set([
 ]);
 
 const PROXY_HOSTS = /^(uploads\.mangadex\.org|[a-z0-9-]+\.mangadex\.network|i\d+\.mangakatana\.com|mangakatana\.com)$/;
+
+// Proxied images are content-addressed upstream (cover filenames and chapter
+// hashes), so the phone may keep them for a good while rather than asking again.
+const IMAGE_MAX_AGE_S = 7 * 24 * 60 * 60;
 
 const MIME = {
 	'.html': 'text/html; charset=utf-8',
@@ -172,6 +178,9 @@ class RemoteServer {
 		this.awayUrl = null; // main.js: () => current internet URL while mapped
 		// phones can't read mangafile:// — local files go through /file instead
 		this.postMap = makePostMap(library, (abs) => '/file?p=' + encodeURIComponent(abs));
+		// covers and pages the phone asks for, kept in memory so a second look
+		// costs nothing and a burst of them doesn't stampede the CDN
+		this.images = new ImageCache();
 	}
 
 	isRunning() {
@@ -693,6 +702,26 @@ class RemoteServer {
 		res.end(JSON.stringify(obj));
 	}
 
+	// Command results, compressed when they're big enough to be worth it. A
+	// series feed is hundreds of chapters of JSON and it goes over Wi-Fi, where
+	// that's most of what opening the page costs; a gzip of it is a tenth the
+	// size and takes a millisecond or two here.
+	jsonBig(req, res, status, obj) {
+		const body = Buffer.from(JSON.stringify(obj), 'utf-8');
+		const wants = /\bgzip\b/.test(req.headers['accept-encoding'] || '');
+		if (!wants || body.length < 4096) return this.json(res, status, obj);
+		zlib.gzip(body, (err, gz) => {
+			if (err) return this.json(res, status, obj);
+			res.writeHead(status, {
+				'Content-Type': 'application/json; charset=utf-8',
+				'Content-Encoding': 'gzip',
+				'Content-Length': gz.length,
+				'Vary': 'Accept-Encoding'
+			});
+			res.end(gz);
+		});
+	}
+
 	async handle(req, res) {
 		const u = new URL(req.url, `http://localhost:${this.port}`);
 		res.setHeader('X-Content-Type-Options', 'nosniff');
@@ -738,7 +767,7 @@ class RemoteServer {
 			// who just turned a page, and who is only a guest
 			let result = await this.api.dispatch(cmd, args, 'remote', actor);
 			if (this.postMap[cmd]) result = this.postMap[cmd](result);
-			this.json(res, 200, { ok: true, result: result ?? null });
+			this.jsonBig(req, res, 200, { ok: true, result: result ?? null });
 		} catch (err) {
 			this.json(res, 500, { ok: false, error: err.message });
 		}
@@ -787,16 +816,29 @@ class RemoteServer {
 		if (actor.kind === 'guest' && !this.guestMayReadFile(abs)) {
 			return this.json(res, 403, { ok: false, error: 'Not allowed for guests' });
 		}
-		if (!this.library.isAllowedPath(abs) || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+		let stat;
+		if (!this.library.isAllowedPath(abs) || !fs.existsSync(abs) || !(stat = fs.statSync(abs)).isFile()) {
 			return this.json(res, 404, { ok: false, error: 'Not found' });
+		}
+		const etag = `"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`;
+		if (req.headers['if-none-match'] === etag) {
+			res.writeHead(304, { 'ETag': etag, 'Cache-Control': 'private, max-age=604800' });
+			return res.end();
 		}
 		res.writeHead(200, {
 			'Content-Type': MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream',
-			'Cache-Control': 'private, max-age=86400'
+			'Content-Length': stat.size,
+			// a downloaded page never changes under its path; only deletion ends it
+			'Cache-Control': 'private, max-age=604800',
+			'ETag': etag
 		});
 		fs.createReadStream(abs).pipe(res);
 	}
 
+	// A cover or page from a manga CDN. Cached in memory and given a long
+	// browser cache lifetime: both URL kinds name their content (a cover's
+	// filename and a chapter's hash never point at different bytes later), so
+	// the phone can keep them without ever going stale.
 	async handleProxy(req, res, u) {
 		// guests included: streamed pages come through here, and the host
 		// allowlist below already limits this to manga CDNs
@@ -810,33 +852,57 @@ class RemoteServer {
 		if (target.protocol !== 'https:' || !PROXY_HOSTS.test(target.hostname)) {
 			return this.json(res, 403, { ok: false, error: 'Host not allowed' });
 		}
-		let upstream;
+
+		const href = target.toString();
+		const etag = '"' + crypto.createHash('sha1').update(href).digest('hex').slice(0, 20) + '"';
+		const cacheControl = `private, max-age=${IMAGE_MAX_AGE_S}, immutable`;
+
+		// The phone already has these exact bytes — nothing to send, and no
+		// upstream request either.
+		if (req.headers['if-none-match'] === etag) {
+			res.writeHead(304, { 'ETag': etag, 'Cache-Control': cacheControl });
+			return res.end();
+		}
+
+		// Asking for it is also how the reader warms the next chapter: a
+		// prefetching <img> that's since been dropped leaves the bytes here.
+		let entry;
 		try {
-			upstream = await fetchWithTimeout(target, { headers: { 'User-Agent': USER_AGENT } }, IMAGE_TIMEOUT_MS);
+			entry = await this.images.load(href);
 		} catch (err) {
 			// without this the phone's <img> just spins forever on a dead CDN
-			return this.json(res, 504, { ok: false, error: `Upstream ${describeFetchError(err)}` });
+			return this.json(res, err.status || 502, { ok: false, error: err.message });
 		}
-		if (!upstream.ok) return this.json(res, 502, { ok: false, error: `Upstream ${upstream.status}` });
-		const buf = Buffer.from(await upstream.arrayBuffer());
 		res.writeHead(200, {
-			'Content-Type': upstream.headers.get('content-type') || 'image/jpeg',
-			'Cache-Control': 'private, max-age=3600'
+			'Content-Type': entry.type,
+			'Content-Length': entry.buf.length,
+			'Cache-Control': cacheControl,
+			'ETag': etag
 		});
-		res.end(buf);
+		res.end(req.method === 'HEAD' ? undefined : entry.buf);
 	}
 
 	handleStatic(req, res, u) {
 		const rel = u.pathname === '/' ? 'index.html' : u.pathname.slice(1);
 		const abs = path.normalize(path.join(MOBILE_DIR, rel));
-		if (!abs.startsWith(MOBILE_DIR + path.sep) || !fs.existsSync(abs) || !fs.statSync(abs).isFile()) {
+		let stat;
+		if (!abs.startsWith(MOBILE_DIR + path.sep) || !fs.existsSync(abs) || !(stat = fs.statSync(abs)).isFile()) {
 			res.writeHead(404, { 'Content-Type': 'text/plain' });
 			return res.end('Not found');
 		}
+		// Still always revalidated — the shell must never lag behind the app
+		// version — but an unchanged file now answers with an empty 304 instead
+		// of re-sending itself, which is most of what opening the app costs.
+		const etag = `"${stat.size.toString(16)}-${stat.mtimeMs.toString(16)}"`;
+		if (req.headers['if-none-match'] === etag) {
+			res.writeHead(304, { 'ETag': etag, 'Cache-Control': 'no-cache' });
+			return res.end();
+		}
 		res.writeHead(200, {
 			'Content-Type': MIME[path.extname(abs).toLowerCase()] || 'application/octet-stream',
-			// always revalidate: the shell must never lag behind the app version
-			'Cache-Control': 'no-cache'
+			'Content-Length': stat.size,
+			'Cache-Control': 'no-cache',
+			'ETag': etag
 		});
 		fs.createReadStream(abs).pipe(res);
 	}

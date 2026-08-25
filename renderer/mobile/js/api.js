@@ -162,6 +162,29 @@ export function img(url) {
 	return url.startsWith('http') ? `/proxy?url=${encodeURIComponent(url)}` : url;
 }
 
+// A cover that doesn't arrive first time is usually a busy moment, not a
+// missing file — a home screen asks for fifty at once. Asking again beats the
+// broken square a phone browser draws and never revisits.
+const COVER_RETRIES = 2;
+
+export function coverImg(url, props = {}) {
+	const src = img(url);
+	const el = document.createElement('img');
+	for (const [k, v] of Object.entries({ loading: 'lazy', decoding: 'async', alt: '', ...props })) {
+		el.setAttribute(k, v);
+	}
+	let tries = 0;
+	el.addEventListener('error', () => {
+		if (++tries > COVER_RETRIES) return;
+		setTimeout(() => {
+			el.removeAttribute('src');
+			el.src = `${src}${src.includes('?') ? '&' : '?'}r=${tries}`;
+		}, 500 * tries);
+	});
+	el.src = src;
+	return el;
+}
+
 // ---------- live download queue ----------
 
 let queue = [];

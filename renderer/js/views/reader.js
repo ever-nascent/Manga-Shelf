@@ -16,6 +16,39 @@ const prefs = {
 
 let cleanup = null;
 
+// Page lists for chapters already asked about, so turning to the next one
+// doesn't wait on a round trip out to MangaDex. Streamed page URLs are signed
+// and go stale, so these are kept only as long as they're good for.
+const PAGE_LIST_TTL_MS = 4 * 60_000;
+const pageLists = new Map(); // chapter id -> { at, urls, online }
+
+function rememberPages(chapterId, value) {
+	pageLists.set(chapterId, { at: Date.now(), ...value });
+	if (pageLists.size > 6) pageLists.delete(pageLists.keys().next().value);
+}
+
+function recallPages(chapterId) {
+	const hit = pageLists.get(chapterId);
+	if (!hit) return null;
+	if (Date.now() - hit.at > PAGE_LIST_TTL_MS) { pageLists.delete(chapterId); return null; }
+	return hit;
+}
+
+// Prefer downloaded pages (any group's copy of this chapter number); fall back
+// to streaming from MangaDex.
+async function fetchPages(mangaId, libEntry, ch) {
+	const cached = recallPages(ch.id);
+	if (cached) return cached;
+	const local = libEntry?.chapters?.find((c) => c.id === ch.id)
+		|| (ch.num != null && libEntry?.chapters?.find((c) => c.num === ch.num));
+	let urls = local ? await window.api.getChapterPages(mangaId, local.id) : [];
+	const online = !urls.length;
+	if (online) urls = await window.api.getChapterImages(ch.id);
+	const value = { urls, online };
+	if (urls.length) rememberPages(ch.id, value);
+	return value;
+}
+
 export async function openReader(ctx, manga, chapterList, index, startPage = 0) {
 	if (cleanup) cleanup();
 
@@ -315,38 +348,98 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	// Pages are appended without src and fetched a few at a time, nearest to the
 	// current page first — opening a 180-page chapter shouldn't burst 180
 	// simultaneous requests at the image server.
-	const LOAD_CONCURRENCY = 4;
+	const LOAD_CONCURRENCY = 6;
+	const PAGE_RETRIES = 2;
 	let loadGen = 0; // bumped per chapter so stale onload callbacks are ignored
 	let inFlight = 0;
+	let pageEls = []; // the current chapter's <img>, in order
+
+	// Where a freshly opened chapter is meant to sit until it has settled; null
+	// once the reader has taken over (see loadChapter).
+	let holdTop = null;
+	let holdFrames = 0;
+	const releaseHold = () => { holdTop = null; };
+	function holdScroll() {
+		if (holdTop === null || holdFrames-- <= 0) return;
+		if (Math.abs(scroll.scrollTop - holdTop) > 2) scroll.scrollTop = holdTop;
+		requestAnimationFrame(holdScroll);
+	}
+	scroll.addEventListener('wheel', releaseHold, { passive: true });
+	scroll.addEventListener('mousedown', releaseHold);
 
 	function nextPending() {
-		const els = imgs();
-		for (let i = page; i < els.length; i++) if (els[i].dataset.src) return els[i];
-		for (let i = Math.min(page, els.length - 1); i >= 0; i--) if (els[i].dataset.src) return els[i];
-		return null;
+		for (let i = page; i < pageEls.length; i++) if (pageEls[i].dataset.src) return i;
+		for (let i = Math.min(page, pageEls.length - 1); i >= 0; i--) if (pageEls[i].dataset.src) return i;
+		return -1;
+	}
+
+	// A page arriving is the one thing that moves the reader without the reader
+	// asking: the placeholder was a guess, the image is the truth. When the page
+	// that changed size sits above where we're looking, the scroll position
+	// moves with it, so nothing appears to happen at all.
+	function settle(el) {
+		if (prefs.mode !== 'vertical') { el.classList.remove('r-pending'); return; }
+		const before = el.offsetHeight;
+		const top = el.offsetTop;
+		el.classList.remove('r-pending');
+		const delta = el.offsetHeight - before;
+		if (delta && top + before <= scroll.scrollTop) {
+			scroll.scrollTop += delta;
+			if (holdTop !== null) holdTop += delta;
+		}
 	}
 
 	function pumpLoads() {
 		const gen = loadGen;
 		while (inFlight < LOAD_CONCURRENCY) {
-			const el = nextPending();
-			if (!el) return;
+			const i = nextPending();
+			if (i < 0) return;
+			const el = pageEls[i];
+			const src = el.dataset.src;
+			delete el.dataset.src;
 			inFlight++;
+			let tries = 0;
 			const done = () => {
-				el.classList.remove('r-pending');
-				if (gen !== loadGen) return;
+				if (gen !== loadGen) return; // a different chapter owns the reader now
 				inFlight--;
 				pumpLoads();
 			};
-			el.addEventListener('load', done, { once: true });
-			el.addEventListener('error', done, { once: true });
-			el.src = el.dataset.src;
-			delete el.dataset.src;
+			el.addEventListener('load', () => { settle(el); done(); }, { once: true });
+			// A page that doesn't arrive is worth asking for again — the image
+			// servers refuse the odd request under load, and a browser left to
+			// itself just draws a broken square and gives up.
+			const onError = () => {
+				if (gen !== loadGen) return;
+				if (++tries <= PAGE_RETRIES) {
+					setTimeout(() => {
+						if (gen !== loadGen) return;
+						el.removeAttribute('src');
+						el.src = src;
+					}, 400 * tries);
+					return;
+				}
+				el.removeEventListener('error', onError);
+				el.classList.remove('r-pending');
+				el.classList.add('r-failed');
+				// the alt text is what shows inside the box a broken image leaves
+				el.alt = 'This page didn\'t load — click to try again';
+				el.title = el.alt;
+				el.addEventListener('click', () => {
+					el.classList.remove('r-failed');
+					el.classList.add('r-pending');
+					el.alt = '';
+					el.dataset.src = src;
+					pumpLoads();
+				}, { once: true });
+				done();
+			};
+			el.addEventListener('error', onError);
+			el.src = src;
 		}
 	}
 
 	// ---------- page display ----------
-	function imgs() { return [...scroll.querySelectorAll('.r-page')]; }
+	function imgs() { return pageEls; }
 
 	function showPage(scrollIntoView = false) {
 		const els = imgs();
@@ -368,22 +461,34 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		showPage();
 	}
 
-	// vertical mode: track which page is at mid-viewport
+	// Vertical mode: the page you're on is the one filling most of the window.
+	// The middle pixel alone got it wrong either way round — the next page on a
+	// short one, the previous on a tall one.
+	function pageOnScreen() {
+		const top = scroll.scrollTop;
+		const bottom = top + scroll.clientHeight;
+		let best = 0;
+		let bestCover = -1;
+		for (let i = 0; i < pageEls.length; i++) {
+			const start = pageEls[i].offsetTop;
+			const end = start + pageEls[i].offsetHeight;
+			if (end <= top) continue;
+			if (start >= bottom) break;
+			const cover = Math.min(end, bottom) - Math.max(start, top);
+			if (cover > bestCover) { bestCover = cover; best = i; }
+		}
+		return best;
+	}
+
 	let scrollRaf = null;
 	scroll.addEventListener('scroll', () => {
-		if (prefs.mode !== 'vertical' || scrollRaf) return;
+		if (prefs.mode !== 'vertical' || scrollRaf || !pageEls.length) return;
 		scrollRaf = requestAnimationFrame(() => {
 			scrollRaf = null;
-			const mid = scroll.scrollTop + scroll.clientHeight / 2;
-			const els = imgs();
-			for (let i = 0; i < els.length; i++) {
-				if (els[i].offsetTop <= mid && mid < els[i].offsetTop + els[i].offsetHeight) {
-					if (page !== i) { page = i; updateIndicator(); }
-					break;
-				}
-			}
+			const i = pageOnScreen();
+			if (page !== i) { page = i; updateIndicator(); }
 		});
-	});
+	}, { passive: true });
 
 	// ---------- chapter loading ----------
 	async function loadChapter(newIndex, startAt) {
@@ -391,7 +496,10 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		if (newIndex >= chapterList.length) { toast('No more chapters — you\'re all caught up!', 'success'); return; }
 		chIndex = newIndex;
 		loadGen++;
+		const gen = loadGen;
 		inFlight = 0;
+		pageEls = [];
+		holdTop = null;
 		chapterSelect.set(chIndex);
 		const ch = chapterList[chIndex];
 		titleEl.textContent = `${manga.title} — ${ch.num ? `Ch. ${ch.num}` : (ch.title || 'Oneshot')}`;
@@ -402,20 +510,19 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		updateIndicator();
 
 		try {
-			// prefer downloaded pages (any group's copy of this chapter number);
-			// fall back to streaming from MangaDex
-			const local = libEntry?.chapters?.find((c) => c.id === ch.id)
-				|| (ch.num != null && libEntry?.chapters?.find((c) => c.num === ch.num));
-			let urls = local ? await window.api.getChapterPages(manga.id, local.id) : [];
-			const online = !urls.length;
-			if (online) urls = await window.api.getChapterImages(ch.id);
+			const { urls, online } = await fetchPages(manga.id, libEntry, ch);
+			if (gen !== loadGen) return; // the reader has moved on since
 			if (!urls.length) throw new Error('No pages found');
 			pages = urls;
 
 			clear(scroll);
-			for (const url of urls) {
-				scroll.append(h('img', { class: 'r-page r-pending', dataset: { src: url }, draggable: false }));
-			}
+			// Every page holds its space before a byte of it arrives, so the
+			// chapter is its real length from the first frame — which is what
+			// makes opening at the top, and the page count, mean anything.
+			pageEls = urls.map((url) => h('img', {
+				class: 'r-page r-pending', dataset: { src: url }, draggable: false, decoding: 'async'
+			}));
+			scroll.append(...pageEls);
 			if (prefs.mode === 'vertical') {
 				scroll.append(h('div', { class: 'chapter-end' },
 					h('div', {}, `End of ${ch.num ? `chapter ${ch.num}` : 'chapter'}${online ? ' (streamed online)' : ''}`),
@@ -426,18 +533,49 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 			}
 
 			page = startAt === 'last' ? pages.length - 1 : (startAt || 0);
-			pumpLoads();
 			applyModeClassesOnly();
-			showPage(true);
-			if (prefs.mode === 'vertical' && page === 0) scroll.scrollTop = 0;
+			// Where the chapter opens: the very top, unless we're picking one
+			// back up where it was left. Held there for a few frames — filling a
+			// scroller with a chapter's worth of new children is exactly when a
+			// browser is most likely to restore the position it had a moment
+			// ago, and the end of the chapter you just left is the one place
+			// this must never open.
+			if (prefs.mode === 'vertical') {
+				holdTop = page > 0 ? pageEls[page].offsetTop : 0;
+				scroll.scrollTop = holdTop;
+				holdFrames = 8;
+				requestAnimationFrame(holdScroll);
+			}
+			pumpLoads();
+			showPage(prefs.mode !== 'vertical');
 			renderRt();
 			// landing in a new chapter changes whether we're done with the gate
 			// one — the group shouldn't wait on the debounce to hear it
 			if (inSession()) pushSync.flush();
+			warmNextChapter();
 		} catch (err) {
+			if (gen !== loadGen) return;
 			clear(scroll);
 			scroll.append(h('div', { class: 'reader-loading' }, `Couldn't load chapter: ${err.message}`));
 		}
+	}
+
+	// The next chapter, fetched while this one is being read: its page list so
+	// turning to it costs no round trip, and its first pages so there's
+	// something on screen the moment it opens.
+	function warmNextChapter() {
+		const next = chapterList[chIndex + 1];
+		if (!next) return;
+		const gen = loadGen;
+		setTimeout(() => {
+			if (gen !== loadGen) return; // already moved on; that chapter warms itself
+			fetchPages(manga.id, libEntry, next).then(({ urls }) => {
+				for (const url of urls.slice(0, 2)) {
+					const pre = new Image();
+					pre.src = url;
+				}
+			}).catch(() => { pageLists.delete(next.id); });
+		}, 2500);
 	}
 
 	// applyMode() minus the recursive showPage

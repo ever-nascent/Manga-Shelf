@@ -1,5 +1,5 @@
 import { h, clear, spinner, errorBox } from '../util.js';
-import { rpc, img } from '../api.js';
+import { rpc, coverImg } from '../api.js';
 
 export async function render(root, params, ctx, signal) {
 	root.append(h('div', { class: 'view-head' }, h('h1', {}, 'Library')));
@@ -18,7 +18,7 @@ export async function render(root, params, ctx, signal) {
 		const grid = h('div', { class: 'grid' });
 		for (const m of all) {
 			grid.append(h('div', { class: 'm-card', onclick: () => ctx.navigate('detail', { id: m.id }) },
-				h('div', { class: 'm-cover' }, m.coverUrl && h('img', { src: img(m.coverUrl), loading: 'lazy', alt: '' })),
+				h('div', { class: 'm-cover' }, m.coverUrl && coverImg(m.coverUrl)),
 				h('div', { class: 'm-title' }, m.title),
 				h('div', { class: 'm-sub' }, `${m.chapters.length} chapter${m.chapters.length === 1 ? '' : 's'}`)
 			));

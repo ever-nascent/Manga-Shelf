@@ -63,10 +63,16 @@ function createApi({ library, downloader, cache, onChange, onDevicesChanged, rea
 
 	const commands = {
 		// ----- discovery (cached: fresh hits skip the network, stale hits refresh in background) -----
+		// Home and the tag list are kept usable however old they are: they're on
+		// disk from last time, so the first screen paints from them at once and
+		// the refresh lands behind it. Waiting on three MangaDex requests before
+		// drawing anything is the difference between opening and loading.
 		'md:home': () =>
-			cache.wrap(`home:${cr().join()}`, 10 * MIN, () => mangadex.getHomeSections(cr()), { persist: true }),
+			cache.wrap(`home:${cr().join()}`, 10 * MIN, () => mangadex.getHomeSections(cr()),
+				{ persist: true, maxStaleMs: 30 * 24 * 60 * MIN }),
 		'md:tags': () =>
-			cache.wrap('tags', 24 * 60 * MIN, () => mangadex.getTags(), { persist: true }),
+			cache.wrap('tags', 24 * 60 * MIN, () => mangadex.getTags(),
+				{ persist: true, maxStaleMs: 365 * 24 * 60 * MIN }),
 		'md:search': (opts) =>
 			cache.wrap(`search:${JSON.stringify(opts)}:${cr().join()}`, 5 * MIN,
 				() => mangadex.searchManga({ ...opts, contentRating: cr() })),

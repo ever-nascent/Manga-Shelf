@@ -8,9 +8,30 @@ const FALLBACK_COVER =
 			<text x="50%" y="50%" fill="#3a4266" font-size="60" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif">?</text>
 		</svg>`);
 
+// A cover the image server refused once is not a cover that doesn't exist —
+// under a screenful of them at a time the odd request comes back empty, and
+// giving up on the first miss is what turns a shelf into a row of "?" boxes.
+// So each one is asked for twice more, spaced out, before the placeholder.
+const COVER_RETRIES = 2;
+
 export function coverImg(src, alt) {
-	const img = h('img', { src: src || FALLBACK_COVER, alt: alt || '', loading: 'lazy' });
-	img.addEventListener('error', () => { img.src = FALLBACK_COVER; }, { once: true });
+	const img = h('img', {
+		src: src || FALLBACK_COVER,
+		alt: alt || '',
+		loading: 'lazy',
+		decoding: 'async'
+	});
+	if (!src) return img;
+	let tries = 0;
+	img.addEventListener('error', () => {
+		if (++tries > COVER_RETRIES) { img.src = FALLBACK_COVER; return; }
+		setTimeout(() => {
+			// dropping the src first makes the browser ask again rather than
+			// hand back the failure it already has
+			img.removeAttribute('src');
+			img.src = src;
+		}, 500 * tries);
+	});
 	return img;
 }
 

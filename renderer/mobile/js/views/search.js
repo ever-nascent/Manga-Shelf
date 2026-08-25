@@ -1,5 +1,5 @@
 import { h, clear, spinner, errorBox, debounce } from '../util.js';
-import { rpc, img } from '../api.js';
+import { rpc, coverImg } from '../api.js';
 import { icon } from '../icons.js';
 
 const PAGE_SIZE = 24;
@@ -57,7 +57,7 @@ export async function render(root, params, ctx, signal) {
 			offset += res.items.length;
 			for (const m of res.items) {
 				grid.append(h('div', { class: 'm-card', onclick: () => ctx.navigate('detail', { id: m.id }) },
-					h('div', { class: 'm-cover' }, m.coverUrl && h('img', { src: img(m.coverUrl), loading: 'lazy', alt: '' })),
+					h('div', { class: 'm-cover' }, m.coverUrl && coverImg(m.coverUrl)),
 					h('div', { class: 'm-title' }, m.title)
 				));
 			}

@@ -630,11 +630,12 @@ app.whenReady().then(() => {
 		}
 	}
 
-	// warm the cache right away so Home/Browse paint instantly
+	// Warm the cache right away so Home/Browse paint instantly. Through the
+	// command registry rather than by hand, so how fresh these are kept is
+	// settled in one place (api.js) instead of drifting between the two.
 	setTimeout(() => {
-		const rating = library.getSettings().contentRating;
-		cache.wrap(`home:${rating.join()}`, 600_000, () => mangadex.getHomeSections(rating), { persist: true }).catch(() => {});
-		cache.wrap('tags', 86_400_000, () => mangadex.getTags(), { persist: true }).catch(() => {});
+		api.dispatch('md:home').catch(() => {});
+		api.dispatch('md:tags').catch(() => {});
 	}, 1000);
 
 	// auto-check follows for new chapters: shortly after launch, then every 2h

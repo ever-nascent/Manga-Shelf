@@ -96,7 +96,7 @@ input:focus { border-color: var(--accent); }
 }
 
 body.linking #nav, body.reading #nav { display: none; }
-body.reading #content { padding-bottom: 0; background: #07080c; }
+body.reading #content { padding-bottom: 0; background: #07080c; overflow-anchor: none; }
 
 /* ============ common ============ */
 .view-head {
@@ -398,7 +398,48 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 .r-ch { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .r-pages { min-height: 100dvh; }
-.r-page { display: block; width: 100%; min-height: 120px; background: #0b0d13; }
+
+/* A page holds its space before it arrives — roughly the shape of a manga page
+   — so the chapter is its real length from the start and scrolling to a page
+   means something while the images are still coming. The page itself is taken
+   out of flow and the box's shape is swapped for the real one on arrival:
+   left in flow, a loaded image stretches its own box before the reader can
+   measure the change, and the correction below then has nothing to correct. */
+.r-slot {
+	position: relative;
+	width: 100%;
+	aspect-ratio: 2 / 3;
+	min-height: 0;
+	overflow: hidden;
+	background: #0b0d13;
+	/* the reader corrects the scroll position itself when a page turns out
+	   taller or shorter than its box; the browser doing it too fights that */
+	overflow-anchor: none;
+}
+.r-page {
+	position: absolute;
+	inset: 0;
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+
+/* A page that wouldn't come, after being asked for twice. Better than the
+   browser's broken-image square, which says nothing and offers nothing. */
+.r-slot.r-failed::after {
+	content: "Page didn't load — tap to try again";
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 24px;
+	text-align: center;
+	color: var(--muted);
+	font-size: 13px;
+	background: var(--panel);
+}
 
 /* ---- read together ---- */
 .r-rt { flex-shrink: 0; }
