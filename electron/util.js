@@ -51,12 +51,11 @@ async function fetchImage(url, attempt = 1) {
 	}
 }
 
-// Is this socket's remote address on the local network (or this machine)?
-// Device pairing is gated on it: a phone on the same Wi-Fi reaches us at a
-// private LAN address, while anything arriving through the internet-forwarded
-// port carries a public source address and is refused. Requiring physical
-// presence for the first link is what keeps a remote stranger from ever
-// attempting to pair.
+// Is this address on a local network (or this machine)? Only isDirectlyReachable
+// below asks — a PC with no private address of its own is sitting on the
+// internet rather than behind a router, which changes what "away" means.
+// (Pairing is not gated on this: it works from any address, held off by the
+// rotating code and the approval prompt. See remoteServer.handlePair.)
 //
 // Deliberately excludes carrier-grade NAT (100.64.0.0/10): that range sits
 // between an ISP and a customer's router, never on a home LAN, so a request
@@ -114,7 +113,6 @@ function writeFileAtomic(file, data) {
 }
 
 module.exports = {
-	USER_AGENT, sleep, makeRateLimiter, fetchImage, writeFileAtomic, isLanAddress,
-	localIPv4s, isDirectlyReachable,
-	fetchWithTimeout, describeFetchError, API_TIMEOUT_MS, IMAGE_TIMEOUT_MS
+	USER_AGENT, sleep, makeRateLimiter, fetchImage, writeFileAtomic,
+	isDirectlyReachable, fetchWithTimeout, describeFetchError, IMAGE_TIMEOUT_MS
 };

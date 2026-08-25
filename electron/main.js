@@ -56,11 +56,6 @@ function toMangaFileUrl(absPath) {
 	return 'mangafile://local/' + encodeURI(absPath.replace(/\\/g, '/')).replace(/#/g, '%23').replace(/\?/g, '%3F');
 }
 
-function decorateLibraryManga(m) {
-	if (!m) return m;
-	return { ...m, coverUrl: m.coverPath ? toMangaFileUrl(m.coverPath) : null };
-}
-
 function createWindow() {
 	// small frameless splash shown the instant the app launches, so there's
 	// never a blank/white window while the real one loads its first screen
@@ -401,11 +396,6 @@ function registerIpc() {
 				margin: 1, width: 480, color: { dark: '#0e1015ff', light: '#ffffffff' }
 			})
 		};
-	}));
-	ipcMain.handle('rt:invites', wrap(() => remoteServer.inviteSummary()));
-	ipcMain.handle('rt:revokeInvite', wrap((code) => {
-		remoteServer.revokeInvite(code);
-		return remoteServer.inviteSummary();
 	}));
 	ipcMain.handle('remote:setApproveDevices', wrap((on) => {
 		library.setSettings({ approveNewDevices: Boolean(on) });

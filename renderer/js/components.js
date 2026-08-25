@@ -438,7 +438,7 @@ export function followStatusLabel(s) {
 }
 
 // Jump straight into the reader for a manga (resumes saved progress if any).
-export async function quickRead(ctx, manga) {
+async function quickRead(ctx, manga) {
 	toast(`Opening ${manga.title}…`, 'info', 2000);
 	try {
 		const [chapters, reading] = await Promise.all([

@@ -1,5 +1,5 @@
 import { h, clear, spinner, errorBox, fmtNum, fmtDate, toast, STATUS_LABEL, dedupeChapters, resumeIndex, renderMarkdown } from '../util.js';
-import { mangaCard, coverImg, openMenu, openModal, styledSelect, quickRead, discoverQuickActions, FOLLOW_STATUSES, followStatusLabel } from '../components.js';
+import { mangaCard, coverImg, openMenu, openModal, styledSelect, discoverQuickActions, FOLLOW_STATUSES, followStatusLabel } from '../components.js';
 import { icon } from '../icons.js';
 
 export async function render(root, params, ctx, signal) {

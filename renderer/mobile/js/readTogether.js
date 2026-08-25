@@ -18,8 +18,8 @@ export function me() {
 	return session?.participants.find((p) => p.id === myId) || null;
 }
 
-function announce(declined = false) {
-	window.dispatchEvent(new CustomEvent('rt-change', { detail: { session, role, declined } }));
+function announce() {
+	window.dispatchEvent(new CustomEvent('rt-change', { detail: { session, role } }));
 }
 
 // Replies to our own commands say who we are in the session. Pushes can't (one
@@ -35,16 +35,13 @@ function applyView(view) {
 function deriveRole() {
 	if (!session || !myId) return null;
 	if (session.hostId === myId) return 'host';
-	if (session.participants.some((p) => p.id === myId)) return 'guest';
-	return session.pending.some((p) => p.id === myId) ? 'pending' : null;
+	return session.participants.some((p) => p.id === myId) ? 'guest' : null;
 }
 
 function applyBroadcast(next) {
-	const wasPending = role === 'pending';
 	session = next;
 	role = deriveRole();
-	// dropped from the queue while the session carries on: the host said no
-	announce(wasPending && role === null && Boolean(session));
+	announce();
 }
 
 window.addEventListener('rt-event', (e) => applyBroadcast(e.detail.session));
@@ -62,16 +59,10 @@ export async function refresh() {
 	return session;
 }
 
-// start() and join() are the only calls that come back with the chapter list,
-// and the next push replaces our copy with the light one — so they hand back
-// the reply's session rather than the stored one. join() only carries chapters
-// once the host has approved; before that it's a request, not a join.
-export async function start(manga, chapters, index, gate) {
-	const view = await rpc('rt:start', manga, chapters, index, gate);
-	applyView(view);
-	return view.session;
-}
-
+// join() is the call that comes back with the chapter list, and the next push
+// replaces our copy with the light one — so it hands back the reply's session
+// rather than the stored one. (A phone is only ever a guest someone invited;
+// the PC serves the library, so the PC hosts.)
 export async function join() {
 	const view = await rpc('rt:join');
 	applyView(view);
@@ -83,10 +74,6 @@ export async function leave() {
 	return session;
 }
 
-export async function approve(id) { applyView(await rpc('rt:approve', id)); }
-export async function deny(id) { applyView(await rpc('rt:deny', id)); }
-export async function setGate(gate) { applyView(await rpc('rt:gate', gate)); }
-export async function setChapter(index) { applyView(await rpc('rt:chapter', index)); }
 export async function setReady(ready) { applyView(await rpc('rt:ready', ready)); }
 
 // The server puts the new name on everyone's roster itself, so there's nothing

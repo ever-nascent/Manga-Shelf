@@ -127,7 +127,6 @@ export async function render(root, params, ctx, signal) {
 	// The single QR always links at the home address; away access is handed over
 	// automatically after linking (mobile app.js). These rows just show the two
 	// addresses for reference.
-	let lastInfo = null;
 	const homeRow = h('div', { class: 'settings-row remote-addr' },
 		h('span', { class: 'remote-label' }, 'Home'), urlCode);
 	const awayRow = h('div', { class: 'settings-row remote-addr hidden' },
@@ -238,7 +237,6 @@ export async function render(root, params, ctx, signal) {
 	};
 
 	const applyRemote = (info) => {
-		lastInfo = info;
 		remoteToggle.checked = info.enabled && info.running;
 		remotePanel.classList.toggle('hidden', !info.running);
 		devicesBlock.classList.toggle('hidden', !info.running && !info.devices.length);

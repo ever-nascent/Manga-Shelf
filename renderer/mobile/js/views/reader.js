@@ -224,7 +224,6 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 		const s = rt.getSession();
 		if (rtPanel.classList.contains('hidden')) return;
 		if (!s) { rtPanel.classList.add('hidden'); return; }
-		const role = rt.getRole();
 		clear(rtPanel);
 
 		const gateCh = chapters[s.index];

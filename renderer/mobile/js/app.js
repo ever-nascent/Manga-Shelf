@@ -5,7 +5,7 @@ import {
 	getToken, setToken, clearToken, pair, rpc, connectEvents, setQueue,
 	sinceLastMutation, awayInfo, isGuest, joinAsGuest
 } from './api.js';
-import { h, clear, toast } from './util.js';
+import { h, clear } from './util.js';
 import { icon } from './icons.js';
 import * as rt from './readTogether.js';
 import * as home from './views/home.js';
@@ -98,10 +98,7 @@ window.addEventListener('remote-change', (e) => {
 // This phone is either a linked device (your own hardware, full access) or a
 // guest someone invited to read one series with them. A guest never sees the
 // tabs, the library, or anything else — just the reader.
-export function guestMode() {
-	return isGuest();
-}
-
+//
 // Drop a guest straight into the shared book. rt:join is what carries the
 // chapter list; redeeming the invite already put them in the session.
 async function openGuestSession() {

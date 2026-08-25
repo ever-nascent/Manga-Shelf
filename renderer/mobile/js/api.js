@@ -215,8 +215,3 @@ export function connectEvents() {
 	});
 	// EventSource reconnects on its own; nothing to do on transient errors
 }
-
-export function disconnectEvents() {
-	es?.close();
-	es = null;
-}

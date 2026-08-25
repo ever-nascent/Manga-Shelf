@@ -328,8 +328,7 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 		if (chIndex < s.index) loadChapter(s.index, 0);
 	}
 
-	const onRtChange = (e) => {
-		if (e.detail.declined) toast('The host didn\'t let you in.', 'error');
+	const onRtChange = () => {
 		renderRt();
 		followGate();
 	};
@@ -439,10 +438,8 @@ export async function openReader(ctx, manga, chapterList, index, startPage = 0) 
 	}
 
 	// ---------- page display ----------
-	function imgs() { return pageEls; }
-
 	function showPage(scrollIntoView = false) {
-		const els = imgs();
+		const els = pageEls;
 		if (!els.length) return;
 		page = Math.max(0, Math.min(page, els.length - 1));
 		if (prefs.mode === 'paged') {

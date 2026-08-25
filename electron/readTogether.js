@@ -10,8 +10,8 @@
 //   soft   anyone may read ahead on their own; they just show as ahead
 //   hard   nobody leaves the gate chapter until everyone is ready
 //
-// Joining needs the host's say-so: a request waits in `pending` until they
-// approve it, and only then does the joiner receive the chapter list.
+// Joining needs an invite the host made deliberately — that is their say-so —
+// and only a joiner holding one receives the chapter list.
 //
 // The session lives only in memory — it's a live thing, not something worth
 // restoring after a restart — and it belongs to whoever started it: when the
@@ -27,10 +27,6 @@ const crypto = require('crypto');
 // only ever handed back out to other clients, but there's no reason to hold an
 // unbounded amount of it.
 const MAX_CHAPTERS = 5000;
-
-// A join request the host never answers shouldn't wait forever, or the asker is
-// left staring at a spinner with nothing to tell them.
-const PENDING_TTL_MS = 2 * 60_000;
 
 const GATES = new Set(['soft', 'hard']);
 
@@ -67,11 +63,10 @@ class ReadTogether {
 
 	// The snapshot every live event carries. The chapter list is big and never
 	// changes mid-session, so it only rides along for participants asking
-	// directly (start, join once approved) — see view().
+	// directly (start, join) — see view().
 	snapshot(withChapters = false) {
 		const s = this.session;
 		if (!s) return null;
-		this.prunePending();
 		const out = {
 			id: s.id,
 			hostId: s.hostId,
@@ -88,7 +83,6 @@ class ReadTogether {
 				ready: p.ready,
 				host: p.id === s.hostId
 			})),
-			pending: [...s.pending.values()].map((r) => ({ id: r.id, name: r.name })),
 			waitingOn: this.waitingOn(),
 			startedAt: s.startedAt,
 			updatedAt: s.updatedAt
@@ -114,8 +108,7 @@ class ReadTogether {
 		const s = this.session;
 		if (!s || !id) return null;
 		if (s.hostId === id) return 'host';
-		if (s.participants.has(id)) return 'guest';
-		return s.pending.has(id) ? 'pending' : null;
+		return s.participants.has(id) ? 'guest' : null;
 	}
 
 	// A rename lands on everyone's roster straight away, rather than waiting for
@@ -172,7 +165,6 @@ class ReadTogether {
 			chapters: list,
 			index: Math.min(int(index), list.length - 1),
 			participants: new Map(),
-			pending: new Map(),
 			startedAt: now,
 			updatedAt: now
 		};
@@ -234,35 +226,11 @@ class ReadTogether {
 		return this.view(actor);
 	}
 
-	approve(actor, id) {
-		const s = this.requireHost(actor);
-		const req = s.pending.get(id);
-		if (!req) throw new Error('That request is no longer waiting');
-		s.pending.delete(id);
-		this.addParticipant({ id: req.id, name: req.name });
-		this.recomputeAll();
-		this.emit('participants');
-		return this.view(actor);
-	}
-
-	deny(actor, id) {
-		const s = this.requireHost(actor);
-		if (s.pending.delete(id)) this.emit('pending');
-		return this.view(actor);
-	}
-
 	requireHost(actor) {
 		const s = this.session;
 		if (!s) throw new Error('No one is reading together right now');
 		if (s.hostId !== actor?.id) throw new Error('Only the host can do that');
 		return s;
-	}
-
-	prunePending() {
-		const s = this.session;
-		if (!s) return;
-		const cutoff = Date.now() - PENDING_TTL_MS;
-		for (const [id, req] of s.pending) if (req.at < cutoff) s.pending.delete(id);
 	}
 
 	// ---------- leaving ----------
@@ -278,7 +246,7 @@ class ReadTogether {
 		const s = this.session;
 		if (!s || !id) return;
 		if (s.hostId === id) { this.end(); return; }
-		const wasIn = s.participants.delete(id) || s.pending.delete(id);
+		const wasIn = s.participants.delete(id);
 		if (!wasIn) return;
 		// one fewer person to wait for may be exactly what the gate needed
 		this.advanceWhileReady();
@@ -366,18 +334,6 @@ class ReadTogether {
 		if (!GATES.has(gate)) throw new Error('Unknown gate mode');
 		s.gate = gate;
 		this.emit('gate');
-		return this.view(actor);
-	}
-
-	// Moving the group somewhere else on purpose — back to reread, or forward
-	// past something. Without this a hard gate has no reverse.
-	setChapter(actor, index) {
-		const s = this.requireHost(actor);
-		s.index = Math.min(int(index), s.chapters.length - 1);
-		for (const p of s.participants.values()) p.readyOverride = null;
-		this.recomputeAll();
-		s.updatedAt = new Date().toISOString();
-		this.emit('advance');
 		return this.view(actor);
 	}
 }

@@ -575,20 +575,6 @@ class RemoteServer {
 		}
 	}
 
-	inviteSummary() {
-		this.pruneInvites();
-		return [...this.invites.entries()].map(([code, inv]) => ({
-			code,
-			expiresAt: inv.expiresAt,
-			maxUses: inv.maxUses,
-			used: inv.used
-		}));
-	}
-
-	revokeInvite(code) {
-		return this.invites.delete(code);
-	}
-
 	async handleGuest(req, res) {
 		if (req.method !== 'POST') return this.json(res, 405, { ok: false, error: 'POST only' });
 		const addr = req.socket.remoteAddress || 'unknown';
