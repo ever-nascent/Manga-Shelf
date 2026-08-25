@@ -1,62 +1,18 @@
-// Client side of Read Together, mirroring the desktop renderer's copy: one
-// live view of the session that both the reader and the join banner read from.
-// Changes arrive either as our own command replies or as 'rt-event' pushes off
-// the SSE stream, and go back out as an 'rt-change' window event.
+// Read Together, phone side: what this app can ask for, and where the news
+// arrives. The session itself is held in the shared rtSession.js that the
+// desktop uses too — see there for how a role is worked out and how changes go
+// out as 'rt-change'.
 
+import { applyView, applyBroadcast, getSession, getRole, getMyId, me, inSession, reset } from '/shared/rtSession.js';
 import { rpc } from './api.js';
 
-let session = null;
-let myId = null; // learned from the first per-caller reply; see applyView
-let role = null; // 'host' | 'guest' | 'pending' | null
-
-export function getSession() { return session; }
-export function getRole() { return role; }
-export function getMyId() { return myId; }
-
-// our own row on the roster, which is where our page and ready state live
-export function me() {
-	return session?.participants.find((p) => p.id === myId) || null;
-}
-
-function announce() {
-	window.dispatchEvent(new CustomEvent('rt-change', { detail: { session, role } }));
-}
-
-// Replies to our own commands say who we are in the session. Pushes can't (one
-// frame goes to every phone), so remember the id from the reply and work the
-// role out of the roster from then on.
-function applyView(view) {
-	session = view.session;
-	myId = view.you.id || myId;
-	role = view.you.role;
-	announce();
-}
-
-function deriveRole() {
-	if (!session || !myId) return null;
-	if (session.hostId === myId) return 'host';
-	return session.participants.some((p) => p.id === myId) ? 'guest' : null;
-}
-
-function applyBroadcast(next) {
-	session = next;
-	role = deriveRole();
-	announce();
-}
+export { getSession, getRole, getMyId, me, reset };
 
 window.addEventListener('rt-event', (e) => applyBroadcast(e.detail.session));
 
-// unlinked: this phone is nobody now, and a relink gets a different device id
-export function reset() {
-	session = null;
-	myId = null;
-	role = null;
-	announce();
-}
-
 export async function refresh() {
 	applyView(await rpc('rt:state'));
-	return session;
+	return getSession();
 }
 
 // join() is the call that comes back with the chapter list, and the next push
@@ -71,7 +27,7 @@ export async function join() {
 
 export async function leave() {
 	applyView(await rpc('rt:leave'));
-	return session;
+	return getSession();
 }
 
 export async function setReady(ready) { applyView(await rpc('rt:ready', ready)); }
@@ -86,6 +42,6 @@ export async function rename(name) {
 // updates our copy along with everyone else's. This never moves anyone else —
 // it only says where we got to.
 export function sync(index, page, pages) {
-	if (role !== 'host' && role !== 'guest') return;
+	if (!inSession()) return;
 	rpc('rt:sync', index, page, pages).catch(() => {});
 }

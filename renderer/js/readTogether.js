@@ -1,52 +1,17 @@
-// Client side of Read Together: one live copy of the session that the reader
-// and the app banner both read from, so they can never disagree about what's
-// running. Every change — someone else's, arriving over IPC, or our own from a
-// command — lands as an 'rt-change' window event.
+// Read Together, desktop side: what this app can ask for, and where the news
+// arrives. The session itself is held in renderer/shared/rtSession.js, which the
+// phone uses too — see there for how a role is worked out and how changes go
+// out as 'rt-change'.
 
-let session = null;
-let myId = null; // learned from the first per-caller reply; see applyView
-let role = null; // 'host' | 'guest' | 'pending' | null
+import { applyView, applyBroadcast, getSession, getRole, getMyId, me, inSession } from '../shared/rtSession.js';
 
-export function getSession() { return session; }
-export function getRole() { return role; }
-export function getMyId() { return myId; }
-
-// our own row on the roster, which is where our page and ready state live
-export function me() {
-	return session?.participants.find((p) => p.id === myId) || null;
-}
-
-function announce() {
-	window.dispatchEvent(new CustomEvent('rt-change', { detail: { session, role } }));
-}
-
-// Replies to our own commands say who we are in the session. Broadcasts can't
-// (one frame goes to everyone), so remember the id from the reply and work the
-// role out of the roster from then on.
-function applyView(view) {
-	session = view.session;
-	myId = view.you.id || myId;
-	role = view.you.role;
-	announce();
-}
-
-function deriveRole() {
-	if (!session || !myId) return null;
-	if (session.hostId === myId) return 'host';
-	return session.participants.some((p) => p.id === myId) ? 'guest' : null;
-}
-
-function applyBroadcast(next) {
-	session = next;
-	role = deriveRole();
-	announce();
-}
+export { getSession, getRole, getMyId, me };
 
 window.api.onReadTogether((evt) => applyBroadcast(evt.session));
 
 export async function refresh() {
 	applyView(await window.api.getReadTogether());
-	return session;
+	return getSession();
 }
 
 // start() is the only call that comes back with the chapter list, and the next
@@ -61,7 +26,7 @@ export async function start(manga, chapters, index, gate) {
 
 export async function leave() {
 	applyView(await window.api.leaveReadTogether());
-	return session;
+	return getSession();
 }
 
 export async function setGate(gate) { applyView(await window.api.setReadTogetherGate(gate)); }
@@ -81,6 +46,6 @@ export async function rename(name) {
 // and updates our copy along with everyone else's. This never moves anyone
 // else — it only says where we got to.
 export function sync(index, page, pages) {
-	if (role !== 'host' && role !== 'guest') return;
+	if (!inSession()) return;
 	window.api.syncReadTogether(index, page, pages).catch(() => {});
 }
