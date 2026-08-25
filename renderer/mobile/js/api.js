@@ -159,7 +159,10 @@ export async function rpc(cmd, ...args) {
 // PC fetches them for us. Local library files (/file...) load directly.
 export function img(url) {
 	if (!url) return '';
-	return url.startsWith('http') ? `/proxy?url=${encodeURIComponent(url)}` : url;
+	// scraped pages sometimes give a protocol-relative address; the proxy only
+	// takes https, and the phone would otherwise resolve it against this origin
+	const abs = url.startsWith('//') ? `https:${url}` : url;
+	return abs.startsWith('http') ? `/proxy?url=${encodeURIComponent(abs)}` : abs;
 }
 
 // A cover that doesn't arrive first time is usually a busy moment, not a

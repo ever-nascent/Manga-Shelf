@@ -88,6 +88,14 @@ export async function render(root, { id }, ctx, signal) {
 		}
 	}, icon('download', 16), 'All');
 
+	// The same escape hatch the desktop has: when MangaDex doesn't have this
+	// series (or has nothing readable of it), go looking on MangaKatana with the
+	// title already filled in. Pointless on a series that came from there.
+	const altBtn = manga.id.startsWith('mk:') ? null : h('button', {
+		class: 'btn',
+		onclick: () => ctx.navigate('search', { query: manga.title, source: 'katana' })
+	}, icon('search', 16), 'Other source');
+
 	// what the downloader needs (coverUrlFull for the cover grab) — only the
 	// online object has it, which is fine: downloading needs to be online anyway
 	function dlManga() {
@@ -101,7 +109,9 @@ export async function render(root, { id }, ctx, signal) {
 		manga.description ? renderMarkdown(manga.description) : '');
 
 	clear(body);
-	body.append(
+	// element.append, not the h() helper — a null child would land on the page
+	// as the word "null", which is what a series with no description used to get
+	body.append(...[
 		h('div', { class: 'd-head' },
 			h('div', { class: 'd-cover' }, manga.coverUrl && coverImg(manga.coverUrl, { loading: 'eager' })),
 			h('div', { class: 'd-info' },
@@ -109,10 +119,10 @@ export async function render(root, { id }, ctx, signal) {
 				meta.map((m) => h('div', { class: 'd-meta' }, m))
 			)
 		),
-		h('div', { class: 'd-actions' }, readBtn, followBtn, dlAllBtn),
+		h('div', { class: 'd-actions' }, readBtn, followBtn, dlAllBtn, altBtn),
 		manga.description ? desc : null,
 		h('h2', { class: 'ch-count' }, `${chapters.length} chapter${chapters.length === 1 ? '' : 's'}`)
-	);
+	].filter(Boolean));
 
 	// ----- chapter list -----
 	const list = h('div', { class: 'ch-list' });

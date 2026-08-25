@@ -120,6 +120,44 @@ body.reading #content { padding-bottom: 0; background: #07080c; overflow-anchor:
 }
 .view-body { padding: 4px 16px 16px; }
 
+/* A line of pills under the head: library shelves, search sources. Scrolls
+   sideways rather than wrapping, so the row never pushes the results down. */
+.shelf-tabs, .src-tabs {
+	display: flex;
+	gap: 8px;
+	overflow-x: auto;
+	scrollbar-width: none;
+	padding: 0 16px 10px;
+}
+.shelf-tabs::-webkit-scrollbar, .src-tabs::-webkit-scrollbar { display: none; }
+.shelf-tab, .src-tab {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 7px 13px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--panel);
+	color: var(--muted);
+	font-size: 13px;
+	white-space: nowrap;
+}
+.shelf-tab.on, .src-tab.on {
+	background: var(--accent-soft);
+	border-color: var(--accent);
+	color: var(--accent);
+	font-weight: 600;
+}
+.shelf-count {
+	font-size: 11px;
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: var(--panel2);
+	font-variant-numeric: tabular-nums;
+}
+.shelf-tab.on .shelf-count { background: rgba(255, 106, 61, .22); }
+
 h2 { font-size: 15.5px; margin: 14px 0 10px; }
 
 .btn {
@@ -238,7 +276,16 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 }
-.m-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+/* one line, so a long one (a MangaKatana status and latest chapter) can't
+   leave one card in a row taller than the rest */
+.m-sub {
+	font-size: 11px;
+	color: var(--muted);
+	margin-top: 2px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
 
 /* ============ search ============ */
 .search-bar {
@@ -270,7 +317,9 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 .d-meta { font-size: 12.5px; color: var(--muted); }
 
 .d-actions { display: flex; gap: 8px; margin: 14px 0 4px; flex-wrap: wrap; }
-.d-actions .btn { flex: 1; min-width: 0; white-space: nowrap; }
+/* basis auto, not 0: with four buttons the row has to be allowed to wrap
+   rather than squeeze the last one off the screen */
+.d-actions .btn { flex: 1 1 auto; min-width: 0; white-space: nowrap; }
 
 .d-desc {
 	color: var(--muted);
