@@ -4,6 +4,10 @@
 
 export { h, clear } from '/shared/dom.js';
 export { debounce } from '/shared/timing.js';
+export {
+	STATUS_LABEL, FOLLOW_STATUSES, followStatusLabel,
+	chapterName, resumeIndex, dedupeChapters
+} from '/shared/manga.js';
 import { h } from '/shared/dom.js';
 
 export const spinner = () => h('div', { class: 'spinner' });
@@ -24,39 +28,6 @@ export function toast(message, type = 'info', ms = 3500) {
 export function fmtDate(iso) {
 	if (!iso) return '';
 	return new Date(iso).toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
-
-// The returned function also has .flush(): run a pending call immediately
-// (the reader uses it so leaving never drops the last progress save).
-
-export const STATUS_LABEL = {
-	ongoing: 'Ongoing',
-	completed: 'Completed',
-	hiatus: 'Hiatus',
-	cancelled: 'Cancelled',
-	unknown: ''
-};
-
-export const FOLLOW_STATUSES = [
-	['reading', 'Reading'], ['plan', 'Plan to Read'], ['completed', 'Completed'],
-	['hold', 'On Hold'], ['dropped', 'Dropped']
-];
-
-export function followStatusLabel(s) {
-	return FOLLOW_STATUSES.find(([v]) => v === s)?.[1] || s;
-}
-
-export function chapterName(ch) {
-	if (ch.num === null || ch.num === undefined || ch.num === '') return ch.title || 'Oneshot';
-	return `Chapter ${ch.num}${ch.title ? ` — ${ch.title}` : ''}`;
-}
-
-// Where to resume in a chapter list: match by chapter id first, then fall back
-// to the chapter number (the saved id may belong to another group's upload).
-export function resumeIndex(list, chapterId, chapterNum) {
-	let idx = list.findIndex((c) => c.id === chapterId);
-	if (idx === -1 && chapterNum != null) idx = list.findIndex((c) => c.num === chapterNum);
-	return idx;
 }
 
 // MangaDex descriptions are Markdown. Render a safe subset (paragraphs, lists,
@@ -125,17 +96,3 @@ function mdInline(text, linkFn) {
 	return nodes;
 }
 
-// Multiple scanlation groups often upload the same chapter; keep one entry per
-// chapter number for reading and bulk downloads.
-export function dedupeChapters(chapters) {
-	const seen = new Set();
-	const out = [];
-	for (const ch of chapters) {
-		if (ch.external || ch.pages === 0) continue;
-		const key = ch.num ?? `oneshot:${ch.id}`;
-		if (seen.has(key)) continue;
-		seen.add(key);
-		out.push(ch);
-	}
-	return out;
-}
