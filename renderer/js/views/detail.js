@@ -1,5 +1,5 @@
 import { h, clear, spinner, errorBox, fmtNum, fmtDate, toast, STATUS_LABEL, dedupeChapters, resumeIndex, renderMarkdown } from '../util.js';
-import { mangaCard, coverImg, openMenu, openModal, styledSelect, quickRead, discoverQuickActions, FOLLOW_STATUSES, followStatusLabel } from '../components.js';
+import { mangaCard, coverImg, openMenu, openModal, styledSelect, discoverQuickActions, FOLLOW_STATUSES, followStatusLabel } from '../components.js';
 import { icon } from '../icons.js';
 
 export async function render(root, params, ctx, signal) {
@@ -8,22 +8,34 @@ export async function render(root, params, ctx, signal) {
 	root.append(body);
 	body.append(spinner());
 
+	// Everything on this page is looked up by the same id, so it all goes out at
+	// once. It used to go in three waves — series, then the rest, then the
+	// chapter feed — and the feed is the slowest of them, so it finished last
+	// having only started third.
+	let chaptersError = null;
+	const chaptersPromise = window.api.getChapters(params.id)
+		.catch((err) => { chaptersError = err; return []; });
+	const restPromise = Promise.all([
+		window.api.getStats(params.id),
+		window.api.getLibraryManga(params.id),
+		window.api.getReading(params.id),
+		window.api.getFollows(),
+		window.api.getFollow(params.id)
+	]);
+
 	let manga;
 	try {
 		manga = await window.api.getManga(params.id);
 	} catch (err) {
+		chaptersPromise.catch(() => {});
+		restPromise.catch(() => {});
 		clear(body);
 		body.append(errorBox(`Couldn't load manga: ${err.message}`, () => ctx.navigate('detail', params, { push: false })));
 		return;
 	}
 
-	const [stats, libEntry, reading, followsAll] = await Promise.all([
-		window.api.getStats(manga.id),
-		window.api.getLibraryManga(manga.id),
-		window.api.getReading(manga.id),
-		window.api.getFollows()
-	]);
-	let follow = await window.api.getFollow(manga.id);
+	const [stats, libEntry, reading, followsAll, initialFollow] = await restPromise;
+	let follow = initialFollow;
 	const followSet = new Set(followsAll.map((f) => f.manga.id));
 
 	clear(body);
@@ -142,11 +154,10 @@ export async function render(root, params, ctx, signal) {
 	body.append(noticeSlot, chaptersHead, chaptersWrap);
 	chaptersWrap.append(spinner());
 
-	try {
-		chapters = await window.api.getChapters(manga.id);
-	} catch (err) {
+	chapters = await chaptersPromise;
+	if (chaptersError) {
 		clear(chaptersWrap);
-		chaptersWrap.append(errorBox(`Couldn't load chapters: ${err.message}`));
+		chaptersWrap.append(errorBox(`Couldn't load chapters: ${chaptersError.message}`));
 	}
 
 	const downloaded = new Set((libEntry?.chapters || []).map((c) => c.id));

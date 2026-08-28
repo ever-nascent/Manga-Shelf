@@ -1,5 +1,6 @@
 import { h, clear, toast, dedupeChapters, resumeIndex, STATUS_LABEL } from './util.js';
 import { icon } from './icons.js';
+import { retryOnError } from '../shared/retryImage.js';
 
 const FALLBACK_COVER =
 	'data:image/svg+xml;utf8,' + encodeURIComponent(
@@ -8,10 +9,18 @@ const FALLBACK_COVER =
 			<text x="50%" y="50%" fill="#3a4266" font-size="60" text-anchor="middle" dominant-baseline="middle" font-family="sans-serif">?</text>
 		</svg>`);
 
+// A cover the image server refused once is not a cover that doesn't exist —
+// under a screenful of them at a time the odd request comes back empty, and
+// giving up on the first miss is what turns a shelf into a row of "?" boxes.
 export function coverImg(src, alt) {
-	const img = h('img', { src: src || FALLBACK_COVER, alt: alt || '', loading: 'lazy' });
-	img.addEventListener('error', () => { img.src = FALLBACK_COVER; }, { once: true });
-	return img;
+	const img = h('img', {
+		src: src || FALLBACK_COVER,
+		alt: alt || '',
+		loading: 'lazy',
+		decoding: 'async'
+	});
+	if (!src) return img;
+	return retryOnError(img, src, { onGiveUp: (el) => { el.src = FALLBACK_COVER; } });
 }
 
 // ---------- fixed-position popup menu (never clipped by containers) ----------
@@ -417,7 +426,7 @@ export function followStatusLabel(s) {
 }
 
 // Jump straight into the reader for a manga (resumes saved progress if any).
-export async function quickRead(ctx, manga) {
+async function quickRead(ctx, manga) {
 	toast(`Opening ${manga.title}…`, 'info', 2000);
 	try {
 		const [chapters, reading] = await Promise.all([

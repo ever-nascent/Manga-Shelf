@@ -6,14 +6,41 @@ import { h, clear, spinner, errorBox, chapterName, debounce, toast } from '../ut
 import { rpc, img } from '../api.js';
 import { icon } from '../icons.js';
 import * as rt from '../readTogether.js';
+import * as gate from '/shared/rtGate.js';
+import { createPageCache } from '/shared/pageList.js';
+import { pageOnScreen } from '/shared/scroll.js';
 
 // Auto-scroll speeds in px/second; remembered across chapters within a session.
 const AUTO_SPEEDS = [30, 55, 90, 140, 210, 300];
 let autoSpeedIdx = 2;
 
+// How many pages are fetched at once, and how many times a page that doesn't
+// arrive is asked for again. Pages are pulled nearest-first rather than all at
+// once: a twenty-page burst is what makes the image servers start refusing, and
+// a refused page is a broken square on the phone.
+const LOAD_CONCURRENCY = 5;
+const PAGE_RETRIES = 2;
+
+// Page lists for chapters we've already asked about, so turning to the next one
+// doesn't wait on a round trip to the PC and out to MangaDex.
+const pageCache = createPageCache();
+
+// Downloaded pages come off the PC's disk; everything else streams through it.
+function fetchPages(mangaId, chapterId) {
+	return pageCache.load(chapterId, async () => {
+		const downloaded = await rpc('lib:pages', mangaId, chapterId).catch(() => []);
+		return downloaded.length ? downloaded : rpc('md:chapterImages', chapterId);
+	}, (urls) => urls.length);
+}
+
 export async function render(root, { manga, chapters, index, page = 0, autoScroll = false }, ctx, signal) {
 	const ch = chapters[index];
 	let current = 0;
+
+	// Where this chapter is meant to sit until it has settled, and the way to
+	// stop insisting on it (see "where this chapter opens" below).
+	let holdTop = null;
+	const releaseHold = () => { holdTop = null; };
 
 	const pageInd = h('div', { class: 'r-ind' }, '');
 	const rtBtn = h('button', { class: 'icon-btn r-rt', 'aria-label': 'Read together' }, icon('users', 21));
@@ -61,6 +88,7 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	};
 	const startAuto = () => {
 		if (scrolling) return;
+		releaseHold(); // the scroller is the auto-scroller's now
 		// already at the bottom? nothing to scroll
 		if (root.scrollTop + root.clientHeight >= root.scrollHeight - 2) return;
 		scrolling = true;
@@ -135,29 +163,17 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	// invited. Your own linked phone isn't a session participant — the PC holds
 	// the host seat — so for it none of this shows at all.
 	const inSession = () => rt.getRole() === 'guest';
-	const hereNow = () => rt.getSession()?.manga.id === manga.id;
-	const allReady = () => !(rt.getSession()?.waitingOn.length);
-
-	// A hard gate holds everyone on the gate chapter until they're all done.
-	// Being past it already doesn't count — that reader is through.
-	function gateHolds() {
-		const s = rt.getSession();
-		return Boolean(s) && s.gate === 'hard' && inSession() && hereNow()
-			&& index <= s.index && !allReady();
-	}
+	const hereNow = () => gate.hereNow(rt.getSession(), manga.id, inSession());
+	const allReady = () => gate.allReady(rt.getSession());
+	const gateHolds = () => gate.gateHolds(rt.getSession(),
+		{ mangaId: manga.id, index, inSession: inSession() });
 
 	function tryChapterChange(run) {
 		if (!gateHolds()) { run(); return; }
-		toast(`Waiting for ${rt.getSession().waitingOn.join(' and ')} to finish this chapter.`);
+		toast(`Waiting for ${gate.waitingFor(rt.getSession())} to finish this chapter.`);
 	}
 
-	function pageOf(p) {
-		if (p.index !== index) {
-			const c = chapters[p.index];
-			return c?.num ? `Ch. ${c.num}` : `Ch. ${p.index + 1}`;
-		}
-		return p.pages ? `p. ${p.page + 1}/${p.pages}` : '—';
-	}
+	const pageOf = (p) => gate.whereTheyAre(p, { index, chapters });
 
 	function renderRt() {
 		const s = rt.getSession();
@@ -183,7 +199,6 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 		const s = rt.getSession();
 		if (rtPanel.classList.contains('hidden')) return;
 		if (!s) { rtPanel.classList.add('hidden'); return; }
-		const role = rt.getRole();
 		clear(rtPanel);
 
 		const gateCh = chapters[s.index];
@@ -258,8 +273,8 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 
 	let pages = [];
 	try {
-		pages = await rpc('lib:pages', manga.id, ch.id).catch(() => []);
-		if (!pages.length) pages = await rpc('md:chapterImages', ch.id);
+		pages = await fetchPages(manga.id, ch.id);
+		if (!pages.length) throw new Error('No pages found');
 	} catch (err) {
 		if (signal.aborted) return;
 		clear(pagesEl);
@@ -270,14 +285,100 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	}
 	if (signal.aborted) return;
 
+	// ----- page slots -----
+	// Every page gets its full-size box before a single byte of it arrives, so
+	// the chapter is its real length from the first frame. Without that the
+	// whole chapter is a few hundred pixels tall while it loads, and where you
+	// are in it means nothing: opening at the top and reading the page number
+	// off the screen both depend on the boxes being right.
 	clear(pagesEl);
-	imgs = pages.map((p, i) => h('img', {
-		class: 'r-page',
-		src: p.startsWith('http') ? img(p) : p,
-		loading: i < 3 ? 'eager' : 'lazy',
-		alt: `Page ${i + 1}`
-	}));
-	pagesEl.append(...imgs);
+	const slots = pages.map(() => h('div', { class: 'r-slot' }));
+	imgs = pages.map((p, i) => {
+		const el = h('img', {
+			class: 'r-page',
+			alt: `Page ${i + 1}`,
+			decoding: 'async',
+			draggable: false
+		});
+		el.dataset.src = p.startsWith('http') ? img(p) : p;
+		slots[i].append(el);
+		return el;
+	});
+	pagesEl.append(...slots);
+
+	// A page arriving is the one thing that can move the reader without the
+	// reader asking: the box was a guess, the image is the truth. Correcting a
+	// page *above* where we're looking would shove the view along with it, so
+	// the scroll position is moved by the same amount and nothing appears to
+	// happen at all.
+	function settle(i) {
+		const slot = slots[i];
+		const el = imgs[i];
+		const before = slot.offsetHeight;
+		const top = slot.offsetTop;
+		slot.classList.add('r-loaded');
+		// the box takes the page's own shape, so the strip is exactly as long
+		// as the pages in it
+		if (el.naturalWidth && el.naturalHeight) {
+			slot.style.aspectRatio = `${el.naturalWidth} / ${el.naturalHeight}`;
+		}
+		const delta = slot.offsetHeight - before;
+		if (delta && top + before <= root.scrollTop) {
+			root.scrollTop += delta;
+			if (holdTop !== null) holdTop += delta;
+		}
+		schedulePaint();
+	}
+
+	// ----- staggered loading -----
+	// Pages are fetched a few at a time, nearest to wherever the reader is
+	// first, so the page in front of them is never queued behind twenty others.
+	let inFlight = 0;
+	let stopped = false;
+	signal.addEventListener('abort', () => { stopped = true; }, { once: true });
+
+	function nextPending() {
+		for (let i = current; i < imgs.length; i++) if (imgs[i].dataset.src) return i;
+		for (let i = Math.min(current, imgs.length - 1); i >= 0; i--) if (imgs[i].dataset.src) return i;
+		return -1;
+	}
+
+	function pumpLoads() {
+		while (!stopped && inFlight < LOAD_CONCURRENCY) {
+			const i = nextPending();
+			if (i < 0) return;
+			const el = imgs[i];
+			const src = el.dataset.src;
+			delete el.dataset.src;
+			inFlight++;
+			let tries = 0;
+			const done = () => { inFlight--; pumpLoads(); };
+			el.addEventListener('load', () => { settle(i); done(); }, { once: true });
+			// A page that doesn't arrive is worth asking for again — the PC may
+			// have been busy, and a phone browser left to itself just draws a
+			// broken square and gives up. Only after that does the slot say so,
+			// with a tap to try once more.
+			const onError = () => {
+				if (stopped) { done(); return; }
+				if (++tries <= PAGE_RETRIES) {
+					setTimeout(() => { if (!stopped) el.src = `${src}${src.includes('?') ? '&' : '?'}r=${tries}`; }, 400 * tries);
+					return;
+				}
+				el.removeEventListener('error', onError);
+				slots[i].classList.add('r-failed');
+				slots[i].addEventListener('click', (e) => {
+					e.stopPropagation();
+					slots[i].classList.remove('r-failed');
+					slots[i].style.aspectRatio = '';
+					el.dataset.src = src;
+					pumpLoads();
+				}, { once: true });
+				done();
+			};
+			el.addEventListener('error', onError);
+			el.src = src;
+		}
+	}
 
 	// end-of-chapter controls
 	const next = chapters[index + 1];
@@ -296,38 +397,52 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	// chapter just stops at the end
 	if (next) onReachEnd = () => { stopAuto(); openNext(true); };
 
-	// resuming mid-chapter: jump once the target page has a size
-	if (page > 0 && imgs[page]) {
-		const target = imgs[page];
-		target.addEventListener('load', () => target.scrollIntoView({ block: 'start' }), { once: true });
-	}
+	// ----- where this chapter opens -----
+	// At the very top, unless we're picking a chapter back up where it was left.
+	current = Math.max(0, Math.min(page, imgs.length - 1));
+	holdTop = current > 0 ? slots[current].offsetTop : 0;
+	root.scrollTop = holdTop;
 
-	// track the page under the middle of the screen
+	// Held there for a few frames. Handing a scroller a screenful of new
+	// children is exactly when a phone browser is most likely to restore or
+	// clamp the position it had a moment ago, and landing at the end of the
+	// chapter you just left is the one place this must never open. It lets go
+	// the instant the reader touches the screen, so it can't fight them.
+	root.addEventListener('touchstart', releaseHold, { signal, passive: true, once: true });
+	root.addEventListener('wheel', releaseHold, { signal, passive: true, once: true });
+	let holds = 8;
+	const hold = () => {
+		if (holdTop === null || stopped || holds-- <= 0) return;
+		if (Math.abs(root.scrollTop - holdTop) > 2) root.scrollTop = holdTop;
+		requestAnimationFrame(hold);
+	};
+	requestAnimationFrame(hold);
+
 	const update = () => {
-		const mid = root.scrollTop + root.clientHeight / 2;
-		let idx = 0;
-		for (let i = 0; i < imgs.length; i++) {
-			if (imgs[i].offsetTop <= mid) idx = i;
-			else break;
-		}
+		const idx = pageOnScreen(root, slots);
 		if (idx !== current) {
 			current = idx;
 			saveProgress();
 			// reaching the last page is what marks this reader ready, so the
 			// gate depends on this going out
 			if (inSession()) pushSync();
+			pumpLoads(); // fetch around wherever the reader has got to
 		}
 		pageInd.textContent = `${current + 1} / ${imgs.length}`;
 	};
-	let ticking = false;
-	root.addEventListener('scroll', () => {
-		if (ticking) return;
-		ticking = true;
-		setTimeout(() => { ticking = false; update(); }, 120);
-	}, { signal });
 
-	current = Math.min(page, imgs.length - 1);
+	// One update per frame at most, and always one after the frame that
+	// prompted it — a trailing timer let the number lag a scroll by a tick.
+	let painting = false;
+	function schedulePaint() {
+		if (painting) return;
+		painting = true;
+		requestAnimationFrame(() => { painting = false; update(); });
+	}
+	root.addEventListener('scroll', schedulePaint, { signal, passive: true });
+
 	pageInd.textContent = `${current + 1} / ${imgs.length}`;
+	pumpLoads();
 	saveProgress(); // opening a chapter marks it as being read
 	// tell the group where this chapter left us — landing on a new one changes
 	// whether we're done with the gate chapter
@@ -335,6 +450,27 @@ export async function render(root, { manga, chapters, index, page = 0, autoScrol
 	renderRt();
 	// and if the gate moved while this chapter was loading, catch up now
 	followGate({ force: true });
+
+	// The next chapter, fetched while this one is being read: its page list so
+	// turning the page costs no round trip, and its first pages so there's
+	// something on screen the moment it opens.
+	let warmed = false;
+	function warmNext() {
+		if (warmed || stopped || !next) return;
+		warmed = true;
+		fetchPages(manga.id, next.id).then((urls) => {
+			for (const u of urls.slice(0, 3)) {
+				const pre = new Image();
+				pre.src = u.startsWith('http') ? img(u) : u;
+			}
+		}).catch(() => { warmed = false; });
+	}
+	// once the pages in hand are on their way, or as soon as the reader is
+	// most of the way through — whichever comes first
+	setTimeout(warmNext, 4000);
+	root.addEventListener('scroll', () => {
+		if (current >= imgs.length - 3) warmNext();
+	}, { signal, passive: true });
 
 	// arrived here from the previous chapter's auto-scroll: keep scrolling
 	if (autoScroll) startAuto();

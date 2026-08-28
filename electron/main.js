@@ -56,11 +56,6 @@ function toMangaFileUrl(absPath) {
 	return 'mangafile://local/' + encodeURI(absPath.replace(/\\/g, '/')).replace(/#/g, '%23').replace(/\?/g, '%3F');
 }
 
-function decorateLibraryManga(m) {
-	if (!m) return m;
-	return { ...m, coverUrl: m.coverPath ? toMangaFileUrl(m.coverPath) : null };
-}
-
 function createWindow() {
 	// small frameless splash shown the instant the app launches, so there's
 	// never a blank/white window while the real one loads its first screen
@@ -402,11 +397,6 @@ function registerIpc() {
 			})
 		};
 	}));
-	ipcMain.handle('rt:invites', wrap(() => remoteServer.inviteSummary()));
-	ipcMain.handle('rt:revokeInvite', wrap((code) => {
-		remoteServer.revokeInvite(code);
-		return remoteServer.inviteSummary();
-	}));
 	ipcMain.handle('remote:setApproveDevices', wrap((on) => {
 		library.setSettings({ approveNewDevices: Boolean(on) });
 		return remoteInfo();
@@ -630,11 +620,12 @@ app.whenReady().then(() => {
 		}
 	}
 
-	// warm the cache right away so Home/Browse paint instantly
+	// Warm the cache right away so Home/Browse paint instantly. Through the
+	// command registry rather than by hand, so how fresh these are kept is
+	// settled in one place (api.js) instead of drifting between the two.
 	setTimeout(() => {
-		const rating = library.getSettings().contentRating;
-		cache.wrap(`home:${rating.join()}`, 600_000, () => mangadex.getHomeSections(rating), { persist: true }).catch(() => {});
-		cache.wrap('tags', 86_400_000, () => mangadex.getTags(), { persist: true }).catch(() => {});
+		api.dispatch('md:home').catch(() => {});
+		api.dispatch('md:tags').catch(() => {});
 	}, 1000);
 
 	// auto-check follows for new chapters: shortly after launch, then every 2h

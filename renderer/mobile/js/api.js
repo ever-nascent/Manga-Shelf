@@ -2,6 +2,8 @@
 // this phone's own session token, then every command goes to POST /api/<cmd>
 // with it; live pushes (queue progress, change pings) arrive over SSE.
 
+import { retryOnError } from '/shared/retryImage.js';
+
 const TOKEN_KEY = 'mstoken';
 const GUEST_KEY = 'msguest';
 
@@ -159,7 +161,25 @@ export async function rpc(cmd, ...args) {
 // PC fetches them for us. Local library files (/file...) load directly.
 export function img(url) {
 	if (!url) return '';
-	return url.startsWith('http') ? `/proxy?url=${encodeURIComponent(url)}` : url;
+	// scraped pages sometimes give a protocol-relative address; the proxy only
+	// takes https, and the phone would otherwise resolve it against this origin
+	const abs = url.startsWith('//') ? `https:${url}` : url;
+	return abs.startsWith('http') ? `/proxy?url=${encodeURIComponent(abs)}` : abs;
+}
+
+// A cover that doesn't arrive first time is usually a busy moment, not a
+// missing file — a home screen asks for fifty at once. A retry carries a
+// different query string so it can't be answered from the browser's own memory
+// of the failure.
+export function coverImg(url, props = {}) {
+	const src = img(url);
+	const el = document.createElement('img');
+	for (const [k, v] of Object.entries({ loading: 'lazy', decoding: 'async', alt: '', ...props })) {
+		el.setAttribute(k, v);
+	}
+	retryOnError(el, src, { urlFor: (s, n) => `${s}${s.includes('?') ? '&' : '?'}r=${n}` });
+	el.src = src;
+	return el;
 }
 
 // ---------- live download queue ----------
@@ -188,9 +208,4 @@ export function connectEvents() {
 		window.dispatchEvent(new CustomEvent('rt-event', { detail: JSON.parse(e.data) }));
 	});
 	// EventSource reconnects on its own; nothing to do on transient errors
-}
-
-export function disconnectEvents() {
-	es?.close();
-	es = null;
 }

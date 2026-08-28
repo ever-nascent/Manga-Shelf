@@ -3,7 +3,7 @@
 // online ones (streamed through the PC).
 
 import { h, clear, spinner, errorBox, toast, chapterName, resumeIndex, dedupeChapters, STATUS_LABEL, FOLLOW_STATUSES, followStatusLabel, renderMarkdown } from '../util.js';
-import { rpc, img, getQueue } from '../api.js';
+import { rpc, coverImg, getQueue } from '../api.js';
 import { icon } from '../icons.js';
 
 export async function render(root, { id }, ctx, signal) {
@@ -14,11 +14,17 @@ export async function render(root, { id }, ctx, signal) {
 	const body = h('div', { class: 'view-body' }, spinner());
 	root.append(body);
 
-	// online data preferred; the PC's library fills in when offline
-	const [remote, lib] = await Promise.all([
-		rpc('md:manga', id).catch(() => null),
-		rpc('lib:get', id).catch(() => null)
-	]);
+	// Everything on this page is looked up by the same id, so it all goes out at
+	// once rather than in three waves — the chapter feed is the slowest of them
+	// and used to start only after the series had come back.
+	// Online data preferred; the PC's library fills in when offline.
+	const remoteP = rpc('md:manga', id).catch(() => null);
+	const libP = rpc('lib:get', id).catch(() => null);
+	const chaptersP = rpc('md:chapters', id).catch(() => null);
+	const followP = rpc('follows:get', id).catch(() => null);
+	const readingP = rpc('reading:get', id).catch(() => null);
+
+	const [remote, lib] = await Promise.all([remoteP, libP]);
 	if (signal.aborted) return;
 	const manga = remote || lib;
 	if (!manga) {
@@ -28,17 +34,10 @@ export async function render(root, { id }, ctx, signal) {
 	}
 	root.querySelector('.head-title').textContent = manga.title;
 
-	let chapters = [];
-	try {
-		chapters = dedupeChapters(await rpc('md:chapters', id));
-	} catch {
-		chapters = lib ? lib.chapters : [];
-	}
+	const feed = await chaptersP;
+	let chapters = feed ? dedupeChapters(feed) : [];
 	if (!chapters.length && lib) chapters = lib.chapters;
-	let [follow, reading] = await Promise.all([
-		rpc('follows:get', id).catch(() => null),
-		rpc('reading:get', id).catch(() => null)
-	]);
+	let [follow, reading] = await Promise.all([followP, readingP]);
 	if (signal.aborted) return;
 
 	const downloaded = new Set(lib ? lib.chapters.map((c) => c.id) : []);
@@ -89,6 +88,14 @@ export async function render(root, { id }, ctx, signal) {
 		}
 	}, icon('download', 16), 'All');
 
+	// The same escape hatch the desktop has: when MangaDex doesn't have this
+	// series (or has nothing readable of it), go looking on MangaKatana with the
+	// title already filled in. Pointless on a series that came from there.
+	const altBtn = manga.id.startsWith('mk:') ? null : h('button', {
+		class: 'btn',
+		onclick: () => ctx.navigate('search', { query: manga.title, source: 'katana' })
+	}, icon('search', 16), 'Other source');
+
 	// what the downloader needs (coverUrlFull for the cover grab) — only the
 	// online object has it, which is fine: downloading needs to be online anyway
 	function dlManga() {
@@ -102,18 +109,20 @@ export async function render(root, { id }, ctx, signal) {
 		manga.description ? renderMarkdown(manga.description) : '');
 
 	clear(body);
-	body.append(
+	// element.append, not the h() helper — a null child would land on the page
+	// as the word "null", which is what a series with no description used to get
+	body.append(...[
 		h('div', { class: 'd-head' },
-			h('div', { class: 'd-cover' }, manga.coverUrl && h('img', { src: img(manga.coverUrl), alt: '' })),
+			h('div', { class: 'd-cover' }, manga.coverUrl && coverImg(manga.coverUrl, { loading: 'eager' })),
 			h('div', { class: 'd-info' },
 				h('div', { class: 'd-title' }, manga.title),
 				meta.map((m) => h('div', { class: 'd-meta' }, m))
 			)
 		),
-		h('div', { class: 'd-actions' }, readBtn, followBtn, dlAllBtn),
+		h('div', { class: 'd-actions' }, readBtn, followBtn, dlAllBtn, altBtn),
 		manga.description ? desc : null,
 		h('h2', { class: 'ch-count' }, `${chapters.length} chapter${chapters.length === 1 ? '' : 's'}`)
-	);
+	].filter(Boolean));
 
 	// ----- chapter list -----
 	const list = h('div', { class: 'ch-list' });

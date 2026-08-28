@@ -232,7 +232,7 @@ select option { background: var(--panel); }
 	opacity: 0;
 	transition: opacity .15s;
 }
-.card:hover .card-actions, .card.show-actions .card-actions { opacity: 1; }
+.card:hover .card-actions { opacity: 1; }
 .card-action {
 	width: 40px;
 	height: 40px;
@@ -773,16 +773,32 @@ select option { background: var(--panel); }
 }
 
 /* vertical strip mode */
-.reader-scroll.vertical { display: block; }
+.reader-scroll.vertical {
+	display: block;
+	/* the reader moves the scroll position itself when a page turns out taller
+	   or shorter than its placeholder; the browser doing it too fights that */
+	overflow-anchor: none;
+}
 .reader-scroll.vertical .r-page {
 	display: block;
 	margin: 0 auto;
 	width: min(var(--strip-width, 760px), 100%);
-	min-height: 200px;
 }
-/* pages that haven't loaded yet hold a taller placeholder so resuming
-   mid-chapter lands close to the right spot before images arrive */
-.reader-scroll.vertical .r-page.r-pending { min-height: 65vh; }
+/* A page holds a page-shaped box before it arrives, so the chapter is its real
+   length from the first frame — which is what makes opening at the top, and
+   the page count in the bar, mean anything while images are still coming. */
+.reader-scroll.vertical .r-page.r-pending,
+.reader-scroll.vertical .r-page.r-failed {
+	aspect-ratio: 2 / 3;
+	background: var(--panel);
+}
+/* asked for twice and still nothing: says so, and takes a click to try again */
+.reader-scroll .r-page.r-failed {
+	cursor: pointer;
+	color: var(--muted);
+	font-size: 13px;
+	text-align: center;
+}
 
 /* paged mode */
 .reader-scroll.paged {
@@ -916,46 +932,6 @@ select option { background: var(--panel); }
 }
 .invite-actions { display: flex; align-items: center; gap: 10px; }
 .rt-panel .btn.wide + .btn.wide { margin-top: 4px; }
-
-/* above the reader (50), below toasts (100) */
-.rt-banner {
-	position: fixed;
-	bottom: 22px;
-	left: 50%;
-	transform: translateX(-50%);
-	z-index: 90;
-	display: flex;
-	align-items: center;
-	gap: 12px;
-	max-width: min(520px, calc(100vw - 44px));
-	padding: 10px 12px;
-	background: var(--panel2);
-	border: 1px solid var(--border);
-	border-left: 3px solid var(--accent);
-	border-radius: 10px;
-	box-shadow: 0 10px 28px rgba(0, 0, 0, .55);
-	animation: slide-up .2s ease;
-}
-.rt-banner .rt-cover {
-	width: 34px;
-	height: 48px;
-	object-fit: cover;
-	border-radius: 4px;
-	flex-shrink: 0;
-}
-.rt-banner .rt-text { min-width: 0; flex: 1; }
-.rt-banner .rt-who { font-size: 13.5px; font-weight: 600; }
-.rt-banner .rt-what {
-	font-size: 12.5px;
-	color: var(--muted);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-@keyframes slide-up {
-	from { opacity: 0; transform: translate(-50%, 10px); }
-	to { opacity: 1; transform: translate(-50%, 0); }
-}
 
 /* ============ toasts ============ */
 #toasts {

@@ -81,17 +81,11 @@ contextBridge.exposeInMainWorld('api', {
 	// read together
 	getReadTogether: invoke('rt:state'),
 	startReadTogether: invoke('rt:start'),
-	joinReadTogether: invoke('rt:join'),
 	leaveReadTogether: invoke('rt:leave'),
 	syncReadTogether: invoke('rt:sync'),
 	setReadTogetherReady: invoke('rt:ready'),
 	setReadTogetherGate: invoke('rt:gate'),
-	setReadTogetherChapter: invoke('rt:chapter'),
-	approveReadTogether: invoke('rt:approve'),
-	denyReadTogether: invoke('rt:deny'),
 	inviteToReadTogether: invoke('rt:invite'),
-	getReadTogetherInvites: invoke('rt:invites'),
-	revokeReadTogetherInvite: invoke('rt:revokeInvite'),
 	kickFromReadTogether: invoke('rt:kick'),
 	renameSelf: invoke('device:rename'),
 	onReadTogether: (cb) => {

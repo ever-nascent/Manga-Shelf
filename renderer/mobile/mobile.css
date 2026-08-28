@@ -96,7 +96,7 @@ input:focus { border-color: var(--accent); }
 }
 
 body.linking #nav, body.reading #nav { display: none; }
-body.reading #content { padding-bottom: 0; background: #07080c; }
+body.reading #content { padding-bottom: 0; background: #07080c; overflow-anchor: none; }
 
 /* ============ common ============ */
 .view-head {
@@ -119,6 +119,44 @@ body.reading #content { padding-bottom: 0; background: #07080c; }
 	text-overflow: ellipsis;
 }
 .view-body { padding: 4px 16px 16px; }
+
+/* A line of pills under the head: library shelves, search sources. Scrolls
+   sideways rather than wrapping, so the row never pushes the results down. */
+.shelf-tabs, .src-tabs {
+	display: flex;
+	gap: 8px;
+	overflow-x: auto;
+	scrollbar-width: none;
+	padding: 0 16px 10px;
+}
+.shelf-tabs::-webkit-scrollbar, .src-tabs::-webkit-scrollbar { display: none; }
+.shelf-tab, .src-tab {
+	flex-shrink: 0;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 7px 13px;
+	border-radius: 999px;
+	border: 1px solid var(--border);
+	background: var(--panel);
+	color: var(--muted);
+	font-size: 13px;
+	white-space: nowrap;
+}
+.shelf-tab.on, .src-tab.on {
+	background: var(--accent-soft);
+	border-color: var(--accent);
+	color: var(--accent);
+	font-weight: 600;
+}
+.shelf-count {
+	font-size: 11px;
+	padding: 1px 6px;
+	border-radius: 999px;
+	background: var(--panel2);
+	font-variant-numeric: tabular-nums;
+}
+.shelf-tab.on .shelf-count { background: rgba(255, 106, 61, .22); }
 
 h2 { font-size: 15.5px; margin: 14px 0 10px; }
 
@@ -238,7 +276,16 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 	-webkit-box-orient: vertical;
 	overflow: hidden;
 }
-.m-sub { font-size: 11px; color: var(--muted); margin-top: 2px; }
+/* one line, so a long one (a MangaKatana status and latest chapter) can't
+   leave one card in a row taller than the rest */
+.m-sub {
+	font-size: 11px;
+	color: var(--muted);
+	margin-top: 2px;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
 
 /* ============ search ============ */
 .search-bar {
@@ -270,7 +317,9 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 .d-meta { font-size: 12.5px; color: var(--muted); }
 
 .d-actions { display: flex; gap: 8px; margin: 14px 0 4px; flex-wrap: wrap; }
-.d-actions .btn { flex: 1; min-width: 0; white-space: nowrap; }
+/* basis auto, not 0: with four buttons the row has to be allowed to wrap
+   rather than squeeze the last one off the screen */
+.d-actions .btn { flex: 1 1 auto; min-width: 0; white-space: nowrap; }
 
 .d-desc {
 	color: var(--muted);
@@ -398,7 +447,48 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 .r-ch { font-size: 11.5px; color: var(--muted); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .r-pages { min-height: 100dvh; }
-.r-page { display: block; width: 100%; min-height: 120px; background: #0b0d13; }
+
+/* A page holds its space before it arrives — roughly the shape of a manga page
+   — so the chapter is its real length from the start and scrolling to a page
+   means something while the images are still coming. The page itself is taken
+   out of flow and the box's shape is swapped for the real one on arrival:
+   left in flow, a loaded image stretches its own box before the reader can
+   measure the change, and the correction below then has nothing to correct. */
+.r-slot {
+	position: relative;
+	width: 100%;
+	aspect-ratio: 2 / 3;
+	min-height: 0;
+	overflow: hidden;
+	background: #0b0d13;
+	/* the reader corrects the scroll position itself when a page turns out
+	   taller or shorter than its box; the browser doing it too fights that */
+	overflow-anchor: none;
+}
+.r-page {
+	position: absolute;
+	inset: 0;
+	display: block;
+	width: 100%;
+	height: 100%;
+	object-fit: contain;
+}
+
+/* A page that wouldn't come, after being asked for twice. Better than the
+   browser's broken-image square, which says nothing and offers nothing. */
+.r-slot.r-failed::after {
+	content: "Page didn't load — tap to try again";
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 0 24px;
+	text-align: center;
+	color: var(--muted);
+	font-size: 13px;
+	background: var(--panel);
+}
 
 /* ---- read together ---- */
 .r-rt { flex-shrink: 0; }
@@ -478,7 +568,6 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 	font-size: 13.5px;
 }
 .rt-gate input { accent-color: var(--accent); width: 18px; height: 18px; }
-.rt-gate .rt-gate-hint { grid-column: 2; font-size: 11.5px; color: var(--muted); }
 .rt-gate-note {
 	font-size: 11.5px;
 	color: var(--muted);
@@ -491,36 +580,6 @@ h2 { font-size: 15.5px; margin: 14px 0 10px; }
 /* a guest gets the reader and nothing else — no tabs to anywhere */
 body.guest #nav { display: none; }
 body.guest #content { padding-bottom: 0; }
-
-/* above the reader bar (50) so an invite still lands mid-chapter, below toasts (90) */
-.rt-banner {
-	position: fixed;
-	z-index: 80;
-	left: 10px;
-	right: 10px;
-	bottom: calc(var(--nav-h) + 10px + env(safe-area-inset-bottom));
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	padding: 10px 12px;
-	background: var(--panel2);
-	border: 1px solid var(--border);
-	border-left: 3px solid var(--accent);
-	border-radius: var(--radius);
-	box-shadow: 0 10px 26px rgba(0, 0, 0, .55);
-}
-/* the tab bar is hidden while reading, so the banner drops down to meet it */
-body.reading .rt-banner { bottom: calc(10px + env(safe-area-inset-bottom)); }
-.rt-banner .rt-text { min-width: 0; flex: 1; }
-.rt-banner .rt-who { font-size: 13px; font-weight: 600; }
-.rt-banner .rt-what {
-	font-size: 12px;
-	color: var(--muted);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-.rt-banner .icon-btn.small { width: 30px; height: 30px; flex-shrink: 0; }
 
 .r-ind {
 	position: fixed;

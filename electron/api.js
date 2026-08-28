@@ -30,7 +30,7 @@ const MUTATES = {
 // the same no matter who asked.
 const NEEDS_ACTOR = new Set([
 	'rt:state', 'rt:start', 'rt:join', 'rt:leave', 'rt:sync', 'rt:ready',
-	'rt:gate', 'rt:chapter', 'rt:approve', 'rt:deny', 'rt:kick', 'device:rename'
+	'rt:gate', 'rt:kick', 'device:rename'
 ]);
 
 // the desktop's well-known actor id (main.js hands it to every IPC dispatch)
@@ -63,10 +63,16 @@ function createApi({ library, downloader, cache, onChange, onDevicesChanged, rea
 
 	const commands = {
 		// ----- discovery (cached: fresh hits skip the network, stale hits refresh in background) -----
+		// Home and the tag list are kept usable however old they are: they're on
+		// disk from last time, so the first screen paints from them at once and
+		// the refresh lands behind it. Waiting on three MangaDex requests before
+		// drawing anything is the difference between opening and loading.
 		'md:home': () =>
-			cache.wrap(`home:${cr().join()}`, 10 * MIN, () => mangadex.getHomeSections(cr()), { persist: true }),
+			cache.wrap(`home:${cr().join()}`, 10 * MIN, () => mangadex.getHomeSections(cr()),
+				{ persist: true, maxStaleMs: 30 * 24 * 60 * MIN }),
 		'md:tags': () =>
-			cache.wrap('tags', 24 * 60 * MIN, () => mangadex.getTags(), { persist: true }),
+			cache.wrap('tags', 24 * 60 * MIN, () => mangadex.getTags(),
+				{ persist: true, maxStaleMs: 365 * 24 * 60 * MIN }),
 		'md:search': (opts) =>
 			cache.wrap(`search:${JSON.stringify(opts)}:${cr().join()}`, 5 * MIN,
 				() => mangadex.searchManga({ ...opts, contentRating: cr() })),
@@ -138,9 +144,6 @@ function createApi({ library, downloader, cache, onChange, onDevicesChanged, rea
 		'rt:sync': (actor, index, page, pages) => readTogether.sync(actor, index, page, pages),
 		'rt:ready': (actor, ready) => readTogether.setReady(actor, ready),
 		'rt:gate': (actor, gate) => readTogether.setGate(actor, gate),
-		'rt:chapter': (actor, index) => readTogether.setChapter(actor, index),
-		'rt:approve': (actor, id) => readTogether.approve(actor, id),
-		'rt:deny': (actor, id) => readTogether.deny(actor, id),
 		'rt:kick': (actor, id) => readTogether.kick(actor, id),
 
 		// ----- naming yourself -----
