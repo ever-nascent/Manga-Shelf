@@ -43,6 +43,11 @@ Grab the latest build from the
 - **Settings**: library folder, content-rating filter, image quality (original /
   data saver), chapter language, notifications toggle, and the app version with a
   manual "check for updates" button
+- **Phone remote**: link a phone over Wi-Fi (QR code or a typed link code) to
+  browse, queue downloads, and read from your library in a phone browser
+- **System tray**: closing the window keeps MangaShelf running in the tray
+  (downloads, notifications, and phone access keep working); right-click the
+  tray icon to reopen the app, jump straight to Connect a Phone, or quit
 
 > Note: some licensed titles on MangaDex (e.g. big Shonen Jump series) only list
 > *external* chapters that point to the publisher's own site. Those can't be

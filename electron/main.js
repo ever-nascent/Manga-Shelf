@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, session, Notification } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, shell, protocol, net, session, Notification, Tray, Menu, nativeImage } = require('electron');
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
@@ -38,6 +38,7 @@ protocol.registerSchemesAsPrivileged([
 
 let win = null;
 let splash = null;
+let tray = null;
 let library = null;
 let downloader = null;
 let cache = null;
@@ -49,6 +50,7 @@ let quitConfirmed = false; // set once the user has answered the quit prompt
 let quitPromptOpen = false;
 let updateReadyVersion = null; // a downloaded update waiting to be installed
 let installingUpdate = false;
+let isQuitting = false; // set only by an explicit Quit; the X button just hides to tray
 
 // Standard-scheme URLs need a (dummy) host — Chromium rejects an empty
 // authority, which silently broke every local cover/page image before.
@@ -110,6 +112,15 @@ function createWindow() {
 	// them. Intercept the close and let the renderer ask what to do.
 	win.on('close', (e) => {
 		if (installingUpdate) return; // the installer is taking it from here
+		// The titlebar X minimizes to the tray instead of quitting, so downloads,
+		// notifications, and phone access keep running in the background. Only an
+		// explicit Quit (tray menu, OS-level quit) sets isQuitting and falls
+		// through to the real shutdown checks below.
+		if (!isQuitting) {
+			e.preventDefault();
+			win.hide();
+			return;
+		}
 		if (!quitConfirmed && downloader?.hasActiveJobs()) {
 			e.preventDefault();
 			askBeforeQuit();
@@ -149,6 +160,49 @@ function shutdown() {
 	if (win && !win.isDestroyed()) win.destroy();
 }
 
+// Restores/focuses the main window, optionally jumping straight to a view
+// (e.g. Settings, so "Connect a phone" lands right on the QR code).
+function showMainWindow(view) {
+	if (!win || win.isDestroyed()) return;
+	if (win.isMinimized()) win.restore();
+	if (!win.isVisible()) win.show();
+	win.focus();
+	if (view) win.webContents.send('app:navigate', view);
+}
+
+// Left-click on the tray icon: the common Windows convention is to toggle the
+// window rather than always raising it.
+function toggleMainWindow() {
+	if (!win || win.isDestroyed()) return;
+	if (win.isVisible() && !win.isMinimized()) {
+		win.hide();
+	} else {
+		showMainWindow();
+	}
+}
+
+// The only path that actually quits rather than hiding to the tray. Routes
+// through win.close() so the existing "downloads in progress" / pending
+// update checks in the close handler still run.
+function quitApp() {
+	isQuitting = true;
+	if (win && !win.isDestroyed()) win.close();
+	else app.quit();
+}
+
+function createTray() {
+	const image = nativeImage.createFromPath(path.join(__dirname, '..', 'build', 'icon.png'));
+	tray = new Tray(image.resize({ width: 16, height: 16 }));
+	tray.setToolTip('MangaShelf');
+	tray.setContextMenu(Menu.buildFromTemplate([
+		{ label: 'Open MangaShelf', click: () => showMainWindow() },
+		{ label: 'Connect a Phone…', click: () => showMainWindow('settings') },
+		{ type: 'separator' },
+		{ label: 'Quit MangaShelf', click: () => quitApp() }
+	]));
+	tray.on('click', () => toggleMainWindow());
+}
+
 // Ask the renderer to show the "downloads in progress" prompt and act on the
 // answer. Falls back to pausing if the renderer can't answer, so a wedged UI
 // can never trap the user in an app that refuses to close.
@@ -184,6 +238,7 @@ function askBeforeQuit() {
 	if (win && !win.isDestroyed()) {
 		win.webContents.send('quit:confirm', { active });
 		if (win.isMinimized()) win.restore();
+		if (!win.isVisible()) win.show(); // may be sitting hidden in the tray
 		win.focus();
 	} else {
 		finish('pause');
@@ -608,6 +663,7 @@ app.whenReady().then(() => {
 
 	registerIpc();
 	createWindow();
+	createTray();
 
 	// resume whatever "Pause & exit" left behind last time
 	const paused = library.takePendingQueue();
@@ -656,10 +712,16 @@ app.whenReady().then(() => {
 	});
 });
 
+// Any quit that didn't come through the tray's Quit item (OS shutdown/logoff,
+// task-manager-adjacent quit signals) still needs to skip the hide-to-tray
+// branch in the close handler, or the app would refuse to go away.
+app.on('before-quit', () => { isQuitting = true; });
+
 // Best-effort: the process may exit before the router answers, but the
 // mapping's own lease (2h) and the conflict-replace on next start cover it.
 app.on('will-quit', () => {
 	upnp?.unmap().catch(() => {});
+	tray?.destroy();
 });
 
 app.on('window-all-closed', () => {
