@@ -39,7 +39,8 @@
     "files": [
       "electron/**/*",
       "renderer/**/*",
-      "package.json"
+      "package.json",
+      "build/icon.png"
     ],
     "win": {
       "icon": "build/icon.png",
